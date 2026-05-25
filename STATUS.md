@@ -1,26 +1,27 @@
 # STATUS
 
-updated: 2026-05-25T22:20:00Z
+updated: 2026-05-25T22:40:00Z
 state: BASELINE_RUNNING
-phase: Phase 2 (baseline) + Phase 3/4 (writing compress/retrain) in parallel
+phase: Phase 2 (baseline) — all code (Phases 1,3,4,5,6) written & smoke-tested
 gpu: NVIDIA GeForce RTX 4090, ~24 GB
 
 ## Now
-Baseline ResNet-20 training is running (200 epochs, 391 steps/epoch, 78,200 total steps).
-While it trains I'm writing + testing the compression library and retraining harness.
+Baseline at ~epoch 117/200, best test_acc 89.18% (trending to ~91% as cosine LR decays).
+All code is written, committed, and smoke-tested (train, compress×8, retrain plain+distill,
+sweep, plot). Waiting for baseline to finish, then will run the compression sweep.
 
 ## Recent (most recent first)
-- 2026-05-25T22:20Z — baseline healthy: epoch 6 test_acc 68.5% (1:36→6:68.5), trending to ~91%
-- 2026-05-25T22:16Z — first baseline launch CRASHED (exp used system python, no tensorboard);
-  fixed by launching with the explicit venv python path. Noted in GOTCHAS.
-- 2026-05-25T22:14Z — Phase 1 core pipeline committed; smoke test passed (roundtrip OK, 0.78s eval)
-- 2026-05-25T22:05Z — Phase 0 complete (scaffolding, deps, setup-complete issue)
+- 2026-05-25T22:40Z — Phase 1 code complete: retrain/sweep/plot committed; smoke tests pass
+- 2026-05-25T22:30Z — compression library (8 techniques) committed; all closeness checks OK
+- 2026-05-25T22:20Z — baseline relaunched on venv python; training healthy
+- 2026-05-25T22:14Z — Phase 1 core pipeline committed (smoke test OK)
+- 2026-05-25T22:05Z — Phase 0 complete
 
 ## Open runs
-- baseline: ~epoch 6/200, last test_acc 68.5%, budget-irrelevant (this is the baseline)
+- baseline: ~epoch 117/200, best test_acc 89.18%
 
 ## Completed runs (most recent first)
-- (none)
+- (none yet — sweep starts after baseline)
 
 ## Issues / flags
-none — first baseline launch crashed on venv/python mismatch, now fixed.
+none
