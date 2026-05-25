@@ -1,0 +1,14 @@
+# Compression sweep definition.
+# (Wrapped in a `techniques:` mapping so the file is valid YAML — the brief showed a
+#  flat list + a trailing key, which is not a single valid YAML document.)
+distill_extras_per_technique: 2   # also retrain the 2 most-compressed knobs with distillation
+
+techniques:
+  - {technique: random_sparse,  knobs: [0.5, 0.25, 0.1, 0.05, 0.01, 0.001]}
+  - {technique: magnitude_prune, knobs: [0.5, 0.25, 0.1, 0.05, 0.01, 0.001]}
+  - {technique: snip,           knobs: [0.5, 0.25, 0.1, 0.05, 0.01]}
+  - {technique: fisher_prune,   knobs: [0.5, 0.25, 0.1, 0.05, 0.01]}
+  - {technique: low_rank,       knobs: [0.5, 0.25, 0.1, 0.05, 0.01]}
+  - {technique: quantize,       knobs: [8, 4, 2, 1]}
+  - {technique: kmeans,         knobs: [6, 4, 2]}
+  - {technique: magprune_quant, knob_pairs: [[0.1, 8], [0.1, 4], [0.1, 2], [0.01, 8], [0.01, 4], [0.01, 2]]}
