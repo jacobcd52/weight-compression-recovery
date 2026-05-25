@@ -15,6 +15,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 
 import torch
 
@@ -215,6 +216,26 @@ def launch_next(args):
     return 3
 
 
+def drain(args, poll=20):
+    """Drive the whole queue to completion, one job at a time.
+
+    Each tick calls launch_next: it waits while a job is RUNNING, otherwise launches
+    the next incomplete job (relaunching crashed ones up to MAX_ATTEMPTS). Returns when
+    the queue is empty (rc 3) or stuck at the attempt cap (rc 2). Designed to be run as
+    its own `exp` job so it survives disconnects.
+    """
+    print(f"[sweep] drain start (poll={poll}s)", flush=True)
+    while True:
+        rc = launch_next(args)
+        if rc == 3:
+            print("[sweep] drain: QUEUE EMPTY — done", flush=True)
+            return 3
+        if rc == 2:
+            print("[sweep] drain: STUCK (remaining jobs at attempt cap)", flush=True)
+            return 2
+        time.sleep(poll)
+
+
 def status(args):
     runs = _read_queue()
     done = [r["name"] for r in runs if _completed(r["name"])]
@@ -228,7 +249,7 @@ def status(args):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("command", choices=["prepare", "launch-next", "status"])
+    ap.add_argument("command", choices=["prepare", "launch-next", "status", "drain"])
     ap.add_argument("--config", default="configs/baseline.yaml")
     ap.add_argument("--sweep", default="configs/sweep.yaml")
     ap.add_argument("--baseline-dir", default="runs/baseline")
@@ -238,6 +259,8 @@ def main():
         prepare(args)
     elif args.command == "launch-next":
         sys.exit(launch_next(args))
+    elif args.command == "drain":
+        sys.exit(drain(args))
     elif args.command == "status":
         sys.exit(status(args))
 
