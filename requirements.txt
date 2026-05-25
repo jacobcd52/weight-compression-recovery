@@ -1,0 +1,14 @@
+# NOTE (driver compat): this pod's NVIDIA driver is 565.57.01 = CUDA 12.7. The default
+# PyPI torch wheel is now built for CUDA 13.0 (torch>=2.12), which the driver is too old
+# to run (torch.cuda.is_available() == False). We therefore pin a CUDA 12.4 build:
+#   uv pip install torch==2.5.1 torchvision==0.20.1 --index-url https://download.pytorch.org/whl/cu124
+# The pins below resolve to the cu124 builds on PyPI/torch index.
+torch==2.5.1
+torchvision==0.20.1
+numpy>=1.26
+matplotlib>=3.8
+pandas>=2.2
+pyyaml>=6.0
+tqdm>=4.66
+tensorboard>=2.16
+scikit-learn>=1.4
