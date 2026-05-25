@@ -1,0 +1,20 @@
+# Baseline ResNet-20 / CIFAR-10 training config.
+run_name: baseline
+seed: 42
+
+# Optimizer (AdamW) + schedule
+lr: 0.001
+weight_decay: 0.0005
+betas: [0.9, 0.999]
+epochs: 200
+warmup_epochs: 5        # linear warmup, then cosine decay to 0
+batch_size: 128
+num_workers: 8
+
+# Recovery experiment knobs (used by retrain.py)
+recovery_margin_pp: 0.5     # threshold = baseline_test_acc - 0.5pp
+budget_fraction: 0.10       # kill/DNR if not recovered within 10% of baseline steps
+
+# Distillation (used by retrain.py --mode distill)
+distill_T: 4.0
+distill_alpha: 0.9
