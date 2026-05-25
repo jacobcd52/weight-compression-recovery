@@ -1,5 +1,13 @@
 # NOTES — running log of decisions & future work
 
+## Baseline result (Phase 2)
+- **best test acc = 90.08%** (final 89.88%), 200 epochs, seed 42.
+- baseline_steps = 78,200 (391 steps/epoch); recovery budget = 7,820 steps (20 epochs).
+- recovery threshold = 90.08 − 0.5 = **89.58%**.
+- 269,722 params; 20 compressible weight tensors = 1,073,344 fp32 bytes.
+- checkpoints (gitignored, on pod): `runs/baseline/{best.pt,final.pt}`, summary in
+  `runs/baseline/summary.json`, per-epoch metrics in `runs/baseline/metrics.csv`.
+
 ## Decisions log (most recent first)
 
 - 2026-05-25 — **BatchNorm / biases / 1-D tensors are dense & uncompressed** and are
