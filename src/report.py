@@ -1,0 +1,184 @@
+"""Generate a self-contained, clickable HTML report at docs/index.html.
+
+Embeds the Pareto figure as a base64 data URI (single-file page), renders the
+key findings computed from the run summaries, and a full results table. Designed
+to be served via GitHub Pages (repo Settings -> Pages, source = /docs on main),
+giving a tap-friendly URL: https://jacobcd52.github.io/weight-compression-recovery/
+"""
+import base64
+import datetime
+import glob
+import html
+import json
+import os
+
+from .plot import load_summaries, pareto_front
+
+
+def _img_data_uri(path):
+    if not os.path.exists(path):
+        return None
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode("ascii")
+    return f"data:image/png;base64,{b64}"
+
+
+def _findings(df):
+    """Compute plain-language headline findings from the results dataframe."""
+    out = []
+    n = len(df)
+    rec = df[df["recovered"]]
+    nrec = len(rec)
+    out.append(f"<b>{nrec} of {n}</b> (technique, knob) runs recovered to within 0.5 pp "
+               f"of the {df['baseline_test_acc'].iloc[0]:.2f}% baseline within the 10% "
+               f"retraining budget; the rest are <b>DNR</b> (did not recover in budget).")
+    if nrec:
+        # most-compressed recovery
+        mc = rec.sort_values("compression_ratio").iloc[0]
+        out.append(f"Most aggressive compression that still recovers: "
+                   f"<b>{html.escape(mc['run_name'])}</b> at compression ratio "
+                   f"<b>{mc['compression_ratio']:.3f}</b> "
+                   f"(≈{1/mc['compression_ratio']:.0f}× smaller), "
+                   f"recovered using {mc['recovery_fraction']*100:.1f}% of baseline training cost.")
+        # cheapest recovery
+        ch = rec.sort_values("recovery_fraction").iloc[0]
+        out.append(f"Cheapest recovery: <b>{html.escape(ch['run_name'])}</b> bounced back in "
+                   f"only <b>{ch['recovery_fraction']*100:.1f}%</b> of the original training cost "
+                   f"(near-lossless reconstructed init).")
+        techs = sorted(rec["technique"].unique())
+        out.append("Techniques with at least one recovery: <b>" +
+                   ", ".join(html.escape(t) for t in techs) + "</b>.")
+    dnr_techs = sorted(set(df["technique"]) - set(rec["technique"]))
+    if dnr_techs:
+        out.append("Techniques that never recovered in budget: <b>" +
+                   ", ".join(html.escape(t) for t in dnr_techs) +
+                   "</b> — these destroy weight structure (zeroing / low-rank), and 20 epochs "
+                   "is not enough to climb back.")
+    return out
+
+
+CSS = """
+:root{--bg:#0f1419;--card:#1a2029;--fg:#e6e6e6;--muted:#9aa6b2;--accent:#5ab1ef;
+--good:#2ea043;--goodbg:#13351d;--bad:#7d3a3a;--badbg:#2a1717;--line:#2a3340;}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:16px/1.55 -apple-system,
+BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;}
+.wrap{max-width:960px;margin:0 auto;padding:24px 18px 80px;}
+h1{font-size:26px;margin:.2em 0 .1em} h2{font-size:20px;margin:1.6em 0 .5em;
+border-bottom:1px solid var(--line);padding-bottom:.3em}
+.sub{color:var(--muted);margin:0 0 1.2em}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;
+padding:16px 18px;margin:14px 0;}
+ul{margin:.4em 0;padding-left:1.2em} li{margin:.45em 0}
+a{color:var(--accent)} code{background:#0b0e12;padding:1px 5px;border-radius:5px;
+font-size:.92em}
+img{width:100%;height:auto;border-radius:10px;background:#fff;padding:6px}
+table{border-collapse:collapse;width:100%;font-size:14px;margin-top:.5em}
+th,td{padding:7px 10px;text-align:right;border-bottom:1px solid var(--line)}
+th:first-child,td:first-child{text-align:left}
+th{color:var(--muted);font-weight:600;position:sticky;top:0;background:var(--card)}
+tr.rec td{background:var(--goodbg)} tr.dnr td{color:var(--muted)}
+.pill{display:inline-block;padding:1px 8px;border-radius:99px;font-size:12px;font-weight:700}
+.pill.rec{background:var(--good);color:#fff} .pill.dnr{background:var(--bad);color:#fff}
+.kpi{display:flex;gap:14px;flex-wrap:wrap} .kpi .b{flex:1;min-width:130px;text-align:center;
+background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px}
+.kpi .n{font-size:24px;font-weight:700} .kpi .l{color:var(--muted);font-size:13px}
+.foot{color:var(--muted);font-size:13px;margin-top:30px}
+"""
+
+
+def build_html(df, fig_uri, complete):
+    now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
+    baseline = df["baseline_test_acc"].iloc[0]
+    threshold = baseline - 0.5
+    n = len(df); nrec = int(df["recovered"].sum())
+    status = "Final" if complete else f"In progress ({n}/56 runs)"
+
+    findings = "".join(f"<li>{x}</li>" for x in _findings(df))
+
+    # results table sorted by technique then ratio
+    df_sorted = df.sort_values(["technique", "compression_ratio"])
+    rows = []
+    for _, r in df_sorted.iterrows():
+        cls = "rec" if r["recovered"] else "dnr"
+        pill = ('<span class="pill rec">REC</span>' if r["recovered"]
+                else '<span class="pill dnr">DNR</span>')
+        recfrac = (f"{r['recovery_fraction']*100:.1f}%" if r["recovered"] else "&mdash;")
+        mode = "distill" if r.get("did_distill") else "plain"
+        rows.append(
+            f"<tr class='{cls}'><td>{html.escape(str(r['technique']))}</td>"
+            f"<td>{html.escape(str(r['knob']))}</td><td>{mode}</td>"
+            f"<td>{r['compression_ratio']:.4f}</td>"
+            f"<td>{1/r['compression_ratio']:.1f}&times;</td>"
+            f"<td>{pill}</td><td>{recfrac}</td>"
+            f"<td>{r['final_test_acc']:.2f}</td></tr>")
+    table = "".join(rows)
+
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Weight-Compression Recovery — Pareto frontier</title>
+<style>{CSS}</style></head><body><div class="wrap">
+
+<h1>Weight-compression recovery</h1>
+<p class="sub">Threat model: if an attacker steals a few compressed bytes of a trained model
+and has the training data, how cheaply can they retrain back to full accuracy?<br>
+ResNet-20 / CIFAR-10 &middot; {status} &middot; generated {now}</p>
+
+<div class="kpi">
+  <div class="b"><div class="n">{baseline:.2f}%</div><div class="l">baseline test acc</div></div>
+  <div class="b"><div class="n">{threshold:.2f}%</div><div class="l">recovery threshold</div></div>
+  <div class="b"><div class="n">{nrec}/{n}</div><div class="l">runs recovered</div></div>
+  <div class="b"><div class="n">10%</div><div class="l">retrain budget cap</div></div>
+</div>
+
+<h2>What this measures</h2>
+<div class="card"><ul>
+<li><b>Compression ratio</b> = compressed bytes / fp32 bytes of the conv+linear weights
+(honest byte counts: bitmask/index overhead, codebooks, U+V, etc.). Lower = more compressed.
+BatchNorm/biases are kept dense and excluded from both sides.</li>
+<li><b>Recovery</b> = reaching test accuracy within 0.5 pp of baseline on the full 10k test set.</li>
+<li><b>Recovery fraction</b> = retraining steps used / baseline steps. Capped at 10%
+(20 epochs vs the 200-epoch baseline); a run that doesn't reach the bar in that budget is
+<b>DNR</b>. Reconstructed weights are used as a dense init and retrained with the same recipe.</li>
+</ul></div>
+
+<h2>Headline findings</h2>
+<div class="card"><ul>{findings}</ul></div>
+
+<h2>Pareto frontier</h2>
+<div class="card">{('<img alt="Pareto frontier" src="'+fig_uri+'">') if fig_uri else
+'<p class="sub">figure pending — will appear when plotting runs.</p>'}
+<p class="sub">x = compression ratio (log, left = more compressed); y = fraction of original
+training cost needed to recover (lower = cheaper). Open markers at the top = DNR. Circles =
+plain retraining, triangles = distillation. Black line = Pareto frontier.</p></div>
+
+<h2>All runs</h2>
+<div class="card" style="overflow:auto;max-height:640px">
+<table><thead><tr><th>technique</th><th>knob</th><th>mode</th><th>ratio</th><th>x smaller</th>
+<th>result</th><th>recovery cost</th><th>final acc %</th></tr></thead>
+<tbody>{table}</tbody></table></div>
+
+<p class="foot">Repo: <a href="https://github.com/jacobcd52/weight-compression-recovery">
+jacobcd52/weight-compression-recovery</a> &middot; full spec in BRIEF.md, narrative in RESULTS.md.
+This page is regenerated by <code>python -m src.report</code>.</p>
+</div></body></html>"""
+
+
+def main():
+    df = load_summaries()
+    if df.empty:
+        print("no summaries yet")
+        return
+    os.makedirs("docs", exist_ok=True)
+    fig_uri = _img_data_uri("figures/pareto.png")
+    # "complete" if all 56 expected runs are present
+    complete = len(df) >= 56
+    htmltext = build_html(df, fig_uri, complete)
+    with open("docs/index.html", "w") as f:
+        f.write(htmltext)
+    print(f"wrote docs/index.html ({len(df)} runs, complete={complete}, "
+          f"figure={'embedded' if fig_uri else 'missing'})")
+
+
+if __name__ == "__main__":
+    main()
