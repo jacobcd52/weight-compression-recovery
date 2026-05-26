@@ -7,7 +7,7 @@ lr_grid: [0.00003, 0.0001, 0.0003, 0.001]   # recovery cost = MIN over this peak
 weight_decay: 0.0005
 betas: [0.9, 0.999]
 batch_size: 128
-num_workers: 8
+num_workers: 2          # low: several retrain jobs run concurrently on one GPU
 
 budget_fraction: 0.10        # cap = 10% of (undertrained) baseline steps
 recovery_loss_margin: 0.0    # recover when test_loss <= baseline_test_loss + margin (strict)

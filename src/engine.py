@@ -51,12 +51,9 @@ def train_loop(model, train_loader, test_loader, device, *,
                optimizer, scheduler, total_steps, tb_writer, csv_logger,
                loss_threshold=None, teacher=None, T=4.0, alpha=0.9,
                use_bf16=True, log_prefix="", on_best=None, eval_every_steps=None):
-    """Run training until `total_steps` optimizer steps are taken, evaluating the
-    full test split every `eval_every_steps` steps (default: once per epoch).
-
-    Recovery metric is TEST LOSS: if `loss_threshold` is set, stop as soon as the
-    full-test cross-entropy <= loss_threshold and record the step (recovery).
-    The on_best checkpoint is taken at the lowest test loss seen.
+    """Run training until `total_steps` optimizer steps are taken, evaluating the full
+    test split every `eval_every_steps` steps (default: once per epoch). Recovery
+    (full-test loss <= loss_threshold) stops the run and records the step.
     """
     ce_loss = nn.CrossEntropyLoss()
     steps_per_epoch = len(train_loader)
@@ -68,7 +65,7 @@ def train_loop(model, train_loader, test_loader, device, *,
     best_acc = 0.0
     best_loss = float("inf")
     recovery_steps = None
-    history = []          # list of (step, test_acc, test_loss)
+    history = []          # list of (step, test_acc, test_loss)  [subset unless confirmed]
     last_eval_step = -1
 
     if teacher is not None:
@@ -81,9 +78,6 @@ def train_loop(model, train_loader, test_loader, device, *,
         last_eval_step = step
         test_acc, test_loss = eval_full(model, test_loader, device, use_bf16=use_bf16)
         history.append((step, test_acc, test_loss))
-        if tb_writer is not None:
-            tb_writer.add_scalar(f"{log_prefix}test_acc", test_acc, step)
-            tb_writer.add_scalar(f"{log_prefix}test_loss", test_loss, step)
         if csv_logger is not None:
             csv_logger.log(epoch=step // steps_per_epoch, step=step,
                            test_acc=test_acc, test_loss=test_loss,
@@ -95,8 +89,8 @@ def train_loop(model, train_loader, test_loader, device, *,
             if on_best is not None:
                 on_best(model, step // steps_per_epoch, step, test_acc, test_loss)
         print(f"[{log_prefix or 'train'}] step {step}/{total_steps} "
-              f"({100*step/total_steps:.1f}% budget) test_acc {test_acc:.2f} "
-              f"test_loss {test_loss:.4f} best_loss {best_loss:.4f}", flush=True)
+              f"({100*step/total_steps:.1f}%) loss {test_loss:.4f} best {best_loss:.4f}",
+              flush=True)
         if (loss_threshold is not None and test_loss <= loss_threshold
                 and recovery_steps is None):
             recovery_steps = step

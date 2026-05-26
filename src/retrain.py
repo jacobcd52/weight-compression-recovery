@@ -99,7 +99,7 @@ def main():
     import shutil
     from .utils import eval_full
     teacher = load_teacher(baseline_dir, device) if did_distill else None
-    lr_grid = cfg.get("lr_grid", [cfg["lr"]])
+    lr_grid = sorted(cfg.get("lr_grid", [cfg["lr"]]))   # ascending: cheap recoveries first -> more pruning
 
     init_acc, init_loss = eval_full(model, test_loader, device)
     print(f"[retrain] run={run_name} tech={technique} knob={knob} mode={args.mode} "
@@ -108,25 +108,29 @@ def main():
           f"warmup={warmup_steps} budget_steps={budget_steps} lr_grid={lr_grid}", flush=True)
 
     # Recovery cost = MIN over a small LR sweep ("how cheaply can the attacker recover").
-    # The retraining recipe is part of the method; for now we sweep only the (cosine) peak LR.
-    lr_results, best = [], None
+    # Exact pruning: the scheduler always spans the full budget, but we stop each LR at the
+    # best recovery step found so far (a later LR only matters if it crosses sooner). This
+    # preserves the exact minimum while skipping wasted steps for the easy/recovering cases.
+    lr_results, best, best_rec = [], None, None
     for lr in lr_grid:
         model.load_state_dict(init_sd)                  # fresh init for each LR
         cfg_lr = dict(cfg); cfg_lr["lr"] = lr
         opt = build_optimizer(model, cfg_lr)
-        sch = build_scheduler(opt, budget_steps, warmup_steps)
+        sch = build_scheduler(opt, budget_steps, warmup_steps)   # full-budget cosine (exactness)
+        cap = best_rec if best_rec is not None else budget_steps
         csv_path = os.path.join(run_dir, f"metrics_lr{lr:.0e}.csv")
         clog = CSVLogger(csv_path, ["epoch", "step", "test_acc", "test_loss", "lr"])
         res = train_loop(
             model, train_loader, test_loader, device,
-            optimizer=opt, scheduler=sch, total_steps=budget_steps,
+            optimizer=opt, scheduler=sch, total_steps=cap,
             tb_writer=None, csv_logger=clog, loss_threshold=loss_threshold,
             teacher=teacher, T=cfg["distill_T"], alpha=cfg["distill_alpha"],
             eval_every_steps=cfg.get("eval_every_steps"), log_prefix=f"lr{lr:.0e} ")
         rf = res["recovery_steps"] / baseline_steps if res["recovered"] else None
+        if res["recovered"]:
+            best_rec = res["recovery_steps"] if best_rec is None else min(best_rec, res["recovery_steps"])
         lr_results.append({"lr": lr, "recovered": res["recovered"],
                            "recovery_fraction": rf, "best_loss": res["best_loss"]})
-        # prefer recovered (then min recovery_fraction), else min best_loss
         key = (0 if res["recovered"] else 1,
                rf if rf is not None else float("inf"), res["best_loss"])
         if best is None or key < best[0]:

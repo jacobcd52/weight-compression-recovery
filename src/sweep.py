@@ -217,22 +217,40 @@ def launch_next(args):
 
 
 def drain(args, poll=20):
-    """Drive the whole queue to completion, one job at a time.
-
-    Each tick calls launch_next: it waits while a job is RUNNING, otherwise launches
-    the next incomplete job (relaunching crashed ones up to MAX_ATTEMPTS). Returns when
-    the queue is empty (rc 3) or stuck at the attempt cap (rc 2). Designed to be run as
-    its own `exp` job so it survives disconnects.
+    """Drive the queue to completion, keeping up to `args.concurrency` jobs running at
+    once (the model is tiny, so a single GPU is heavily underutilized — concurrency is
+    the cheap throughput win). Returns when the queue is empty (rc 3) or stuck (rc 2).
+    Designed to be run as its own `exp` job so it survives disconnects.
     """
-    print(f"[sweep] drain start (poll={poll}s)", flush=True)
+    k = max(1, getattr(args, "concurrency", 1))
+    print(f"[sweep] drain start (poll={poll}s, concurrency={k})", flush=True)
     while True:
-        rc = launch_next(args)
-        if rc == 3:
+        runs = _read_queue()
+        incomplete = [r for r in runs if not _completed(r["name"])]
+        if not incomplete:
             print("[sweep] drain: QUEUE EMPTY — done", flush=True)
             return 3
-        if rc == 2:
-            print("[sweep] drain: STUCK (remaining jobs at attempt cap)", flush=True)
-            return 2
+        running = [r for r in incomplete if _exp_status(r["name"]) == "RUNNING"]
+        slots = k - len(running)
+        if slots > 0:
+            attempts = _attempts()
+            launched = 0
+            for r in incomplete:
+                if launched >= slots:
+                    break
+                if _exp_status(r["name"]) == "RUNNING":
+                    continue
+                n = attempts.get(r["name"], 0)
+                if n >= MAX_ATTEMPTS:
+                    continue
+                attempts[r["name"]] = n + 1
+                _save_attempts(attempts)
+                _launch(r, args)
+                launched += 1
+            if launched == 0 and not running:
+                stuck = [r["name"] for r in incomplete if attempts.get(r["name"], 0) >= MAX_ATTEMPTS]
+                print(f"[sweep] drain: STUCK at attempt cap: {stuck}", flush=True)
+                return 2
         time.sleep(poll)
 
 
@@ -255,6 +273,8 @@ def main():
     ap.add_argument("--baseline-dir", default="runs/baseline")
     ap.add_argument("--tag", default="",
                     help="suffix for queue/index/attempts files so multiple sweeps coexist")
+    ap.add_argument("--concurrency", type=int, default=1,
+                    help="max concurrent retrain jobs (one tiny GPU fits several)")
     args = ap.parse_args()
 
     if args.tag:
