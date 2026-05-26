@@ -37,6 +37,39 @@ def load_summaries(runs_dir="runs"):
     return pd.DataFrame(rows)
 
 
+def make_baseline_curve(runs_dir="runs", out_dir="figures"):
+    """Embed-friendly baseline training curve (test loss + test acc vs epoch) from the CSV."""
+    import csv
+    path = os.path.join(runs_dir, "baseline", "metrics.csv")
+    if not os.path.exists(path):
+        return
+    ep, acc, loss = [], [], []
+    for r in csv.DictReader(open(path)):
+        ep.append(int(r["epoch"]) + 1)
+        acc.append(float(r["test_acc"]))
+        if r.get("test_loss"):
+            loss.append(float(r["test_loss"]))
+    os.makedirs(out_dir, exist_ok=True)
+    fig, ax1 = plt.subplots(figsize=(9, 5))
+    if loss:
+        ax1.plot(ep, loss, color="tab:blue", lw=1.8, label="test loss")
+        ax1.set_ylabel("test CE loss", color="tab:blue")
+        ax1.tick_params(axis="y", labelcolor="tab:blue")
+    ax1.set_xlabel("epoch")
+    ax1.grid(alpha=.25)
+    ax2 = ax1.twinx()
+    ax2.plot(ep, acc, color="tab:red", lw=1.8, label="test acc")
+    ax2.set_ylabel("test acc %", color="tab:red")
+    ax2.tick_params(axis="y", labelcolor="tab:red")
+    ax1.set_title(f"Baseline training (undertrained, {len(ep)} epochs) — "
+                  f"final test acc {acc[-1]:.1f}%"
+                  + (f", test loss {loss[-1]:.3f}" if loss else ""))
+    fig.tight_layout()
+    fig.savefig(os.path.join(out_dir, "baseline_curve.png"), dpi=140)
+    plt.close(fig)
+    print(f"wrote {out_dir}/baseline_curve.png")
+
+
 def attach_amortized(df, compressed_dir="compressed"):
     """Add an 'amortized_ratio' column: per-weight bytes only (codebook/scale overhead
     removed), computed from the saved compressed files. Approximates the ratio at large
@@ -113,10 +146,9 @@ def make_plot(df, out_dir="figures", budget=0.10, ratio_col="compression_ratio",
     ax.axhline(budget, color="grey", ls="--", lw=1.0, alpha=0.7)
 
     ax.set_xscale("log")
-    ax.set_yscale("log")
     ax.set_xlabel(f"Compression ratio  ({subtitle}; lower = more compressed)")
-    ax.set_ylabel("Recovery cost  (retrain steps / baseline steps, log)")
-    ax.set_ylim(8e-4, budget * 1.35)
+    ax.set_ylabel("Recovery cost  (retrain steps / baseline steps)")
+    ax.set_ylim(0, budget * 1.08)
     ax.set_title("Weight-compression recovery: compression vs. retraining cost\n"
                  "ResNet-20 / CIFAR-10 (open markers at top = DNR within 10% budget)")
     ax.grid(True, which="both", alpha=0.25)
@@ -169,6 +201,7 @@ def main():
               subtitle="honest bytes incl. codebook/scale overhead")
     make_plot(df, ratio_col="amortized_ratio", out_name="pareto_amortized",
               subtitle="amortized: size-independent codebook/scale overhead removed")
+    make_baseline_curve()
 
 
 if __name__ == "__main__":

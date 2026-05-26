@@ -1,38 +1,34 @@
 # STATUS
 
-updated: 2026-05-26T02:35:00Z
-state: SWEEP_RUNNING
-phase: v2 sweep — undertrained CIFAR baseline, test-loss recovery, full AQLM, promising methods only
+updated: 2026-05-26T03:25:00Z
+state: DONE
+phase: v2 sweep complete (test-loss, undertrained baseline, full AQLM, amortized plot)
 gpu: NVIDIA GeForce RTX 4090, ~24 GB
+next: awaiting human
 
 ## Now
-Major regime change this session:
-- Baseline retrained to **50 epochs** (undertrained, less overfit): acc 88.12%, **test loss 0.4013**
-  (lower than the 200-epoch's 0.62 — overfitting confirmed).
-- Recovery metric switched to **test loss** (recover when full-test CE < baseline 0.4013, strict).
-- Retrain **warmup cut** from 5 epochs to 100 steps; eval every 20 steps (fine).
-- **Full AQLM implemented** (activation-aware per-layer additive quant) alongside simplified additive_vq.
-- Sweep restricted to **promising methods** (quantize, kmeans, magnitude_prune, magprune_quant,
-  additive_vq, aqlm); dropped random/snip/fisher/low_rank.
+DONE. v2 sweep complete (29 runs). Two Pareto plots (honest + amortized) + baseline curve + table
+all embedded in the clickable report. Pushed; live page refreshed.
+- Report: https://jacobcd52.github.io/weight-compression-recovery/
 
-exp job **sweep_driver_v2** is draining a 29-run queue (queue_v2.txt). 1 done (quantize_8 recovered
-@7.0%). ~30-50 min remaining.
-
-## NOTE FOR AUTOPILOT / FRESH SESSIONS
-Driver: sweep_driver_v2, queue runs/queue_v2.txt. Resume if dead with queue non-empty:
-`exp sweep_driver_v2 -- /workspace/envs/weight-compression-recovery/bin/python -m src.sweep drain --config configs/retrain.yaml --sweep configs/sweep_promising.yaml --tag v2`
-When empty: `python -m src.plot && python -m src.report`. Plot only shows test-loss-regime runs.
+## Result summary (v2)
+- Undertrained 50-epoch baseline: test loss 0.401, acc 88.1%. Recovery = test loss < 0.401 (strict).
+- Recovery cost ~constant ~7% for all recovering methods (schedule artifact) → the real axis is
+  max compression that recovers.
+- Recoverable frontier ~32x (amortized ~0.031): quantize_1, additive_vq_1_8_8, aqlm_2_4_8.
+- AMORTIZED plot (codebook/scale overhead removed): AQLM jumps from full 0.218 -> amortized 0.0625
+  and recovers @7% — competitive with kmeans/quantize/additive_vq. Honest bytes penalize AQLM's
+  per-layer codebooks on a 270k model; amortized shows it's fine at scale. VQ family ~tied here.
 
 ## Recent (most recent first)
-- 2026-05-26T02:35Z — launched v2 sweep (test-loss, undertrained, full AQLM, promising only)
-- 2026-05-26T02:20Z — 50-epoch baseline done (88.12%, loss 0.4013); full AQLM implemented
-- 2026-05-26T01:35Z — prior AQLM/additive_vq sweep done (now superseded by v2 regime)
+- 2026-05-26T03:25Z — v2 sweep done (29 runs); amortized + honest plots + baseline curve in report
+- 2026-05-26T02:35Z — launched v2 sweep
+- 2026-05-26T02:20Z — 50-epoch baseline + full AQLM
 
-## Open runs
-- sweep_driver_v2: draining 29-run queue (1/29 done)
+## Open runs / Issues
+- none
 
-## Completed runs
-- quantize_8: ratio 0.250, recovered @ recovery_fraction 0.070 (test_loss 0.399 < 0.401)
-
-## Issues / flags
-none
+## Backlog / future
+- ~50M-param LLM middle ground (where AQLM codebook tax amortizes); then maybe 1.5B (see SCALING.md).
+- Decouple the recovery-schedule confound (recovery cost is ~constant ~7% under the current recipe).
+- Full-Hessian + beam-search AQLM (current uses diagonal Hessian + greedy codes).
