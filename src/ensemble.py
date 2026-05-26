@@ -110,7 +110,8 @@ def run_ensemble(inits, lrs, *, baseline_loss, baseline_steps, budget_steps, war
             if rec_step[i] is None and li <= baseline_loss:
                 rec_step[i] = step
                 active[i] = 0.0                            # freeze: this config recovered
-        curve.append((step, float(losses.min()), float(accs.max())))  # best-over-LRs envelope
+        curve.append((step, losses.detach().cpu().tolist(),
+                      accs.detach().cpu().tolist()))     # full per-config trajectory
         return losses
 
     def stop_now():

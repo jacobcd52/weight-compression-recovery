@@ -1,0 +1,10 @@
+# Trimmed sweep: only the families that have been worth it (quant + VQ).
+# Dropped (consistently DNR / underperforming): random_sparse, snip, fisher_prune, low_rank,
+# magnitude_prune, magprune_quant.
+distill_extras_per_technique: 0
+
+techniques:
+  - {technique: quantize,    knobs: [8, 4, 2, 1]}
+  - {technique: kmeans,      knobs: [6, 4, 2]}
+  - {technique: additive_vq, knob_pairs: [[4, 8, 8], [2, 8, 8], [1, 8, 8], [1, 4, 8], [1, 2, 8]]}
+  - {technique: aqlm,        knob_pairs: [[2, 8, 8], [4, 4, 8], [2, 4, 8], [1, 4, 8], [1, 2, 8]]}

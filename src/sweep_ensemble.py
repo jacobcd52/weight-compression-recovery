@@ -30,6 +30,11 @@ def main():
                     help="models per vmap chunk (x len(lr_grid) configs run together)")
     ap.add_argument("--only", default=None,
                     help="comma-separated run names (technique_knob) to run a subset")
+    ap.add_argument("--target-epoch", type=int, default=None,
+                    help="recovery target = baseline test loss at this epoch (from its curve); "
+                         "the denominator for recovery_fraction is then target-epoch x steps/epoch")
+    ap.add_argument("--budget-fraction", type=float, default=None,
+                    help="max retrain steps as a fraction of the denominator (overrides cfg)")
     args = ap.parse_args()
     only = set(args.only.split(",")) if args.only else None
 
@@ -41,10 +46,21 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     base = json.load(open(os.path.join(args.baseline_dir, "summary.json")))
-    baseline_loss = base["baseline_test_loss"]
-    baseline_steps = base["baseline_steps"]
-    budget_steps = int(round(cfg["budget_fraction"] * baseline_steps))
-    warmup_steps = int(cfg.get("warmup_steps", cfg.get("warmup_epochs", 5) * base["steps_per_epoch"]))
+    spe = base["steps_per_epoch"]
+    if args.target_epoch is not None:
+        # target = baseline test loss at target_epoch (from its curve); denominator = that epoch's steps
+        import csv as _csv
+        mrows = list(_csv.DictReader(open(os.path.join(args.baseline_dir, "metrics.csv"))))
+        baseline_loss = float(mrows[args.target_epoch - 1]["test_loss"])
+        baseline_steps = args.target_epoch * spe
+        print(f"[target] epoch {args.target_epoch}: loss={baseline_loss:.4f}, denom={baseline_steps} steps",
+              flush=True)
+    else:
+        baseline_loss = base["baseline_test_loss"]
+        baseline_steps = base["baseline_steps"]
+    budget_fraction = args.budget_fraction if args.budget_fraction is not None else cfg["budget_fraction"]
+    budget_steps = int(round(budget_fraction * baseline_steps))
+    warmup_steps = int(cfg.get("warmup_steps", 5 * spe))
     eval_every = int(cfg.get("eval_every_steps", 20))
 
     ckpt = torch.load(os.path.join(args.baseline_dir, "best.pt"),
@@ -68,35 +84,44 @@ def main():
                        "cbytes": cbytes, "init": reconstruct(comp)})
         print(f"built {tech}_{ks:<10} ratio={cbytes/bbytes:.4f}", flush=True)
 
-    # 2) run the ensemble in model-chunks (each chunk: G models x len(lr_grid) configs)
-    K = len(lr_grid)
-    # One method at a time: vmap its K LRs (W=K), stop the moment ANY LR crosses
-    # (= the min recovery over LRs). Methods run in series. Fast methods exit in a step
-    # or two instead of dragging a wide batch to full budget.
+    # 2) WIDE-BATCH: chunk G models, vmap all their LRs together (G*K configs) to saturate the
+    # GPU. stop_on_any=False -> each config is masked (frozen) when it crosses; the chunk runs to
+    # budget (small, so cheap). Per-method recovery = min over its LRs; per-method curve = the
+    # min-loss / max-acc envelope over its LR indices.
     from .utils import CSVLogger
-    spe = base["steps_per_epoch"]
+    K = len(lr_grid)
+    G = max(1, args.chunk_models)
     per_model_results, per_model_curves = {}, {}
-    for mi, mdl in enumerate(models):
-        inits = [mdl["init"]] * K
-        res, curve = run_ensemble(inits, list(lr_grid), baseline_loss=baseline_loss,
+    done = 0
+    for c0 in range(0, len(models), G):
+        chunk = models[c0:c0 + G]
+        inits, lrs, owner = [], [], []
+        for mi, mdl in enumerate(chunk):
+            for lr in lr_grid:
+                inits.append(mdl["init"]); lrs.append(lr); owner.append(mi)
+        res, curve = run_ensemble(inits, lrs, baseline_loss=baseline_loss,
                            baseline_steps=baseline_steps, budget_steps=budget_steps,
                            warmup_steps=warmup_steps, eval_every=eval_every,
                            train_loader=train_loader, test_loader=test_loader,
                            device=device, norm=norm, num_classes=10,
                            weight_decay=cfg["weight_decay"], betas=tuple(cfg["betas"]),
-                           stop_on_any=True, log_prefix=f" {mdl['name']}")
-        per_model_results[mdl["name"]] = res
-        per_model_curves[mdl["name"]] = curve
-        # record the best-over-LRs loss/acc trajectory so the report can show curves
-        run_dir = os.path.join("runs", mdl["name"]); os.makedirs(run_dir, exist_ok=True)
-        clog = CSVLogger(os.path.join(run_dir, "metrics.csv"),
-                         ["epoch", "step", "test_acc", "test_loss", "lr"])
-        for (st, lo, ac) in curve:
-            clog.log(epoch=st // spe, step=st, test_acc=ac, test_loss=lo, lr=0)
-        rec = [r for r in res if r["recovered"]]
-        tag = (f"REC@{min(r['recovery_fraction'] for r in rec)*100:.2f}%" if rec else "DNR")
-        print(f"[ensemble] {mi+1}/{len(models)} {mdl['name']:<22} ratio={mdl['ratio']:.4f} {tag}",
-              flush=True)
+                           stop_on_any=False, log_prefix=f" c{c0//G}")
+        for mi, mdl in enumerate(chunk):
+            idxs = [j for j in range(len(owner)) if owner[j] == mi]
+            per_model_results[mdl["name"]] = [res[j] for j in idxs]
+            mc = [(st, min(losses[j] for j in idxs), max(accs[j] for j in idxs))
+                  for (st, losses, accs) in curve]
+            per_model_curves[mdl["name"]] = mc
+            run_dir = os.path.join("runs", mdl["name"]); os.makedirs(run_dir, exist_ok=True)
+            clog = CSVLogger(os.path.join(run_dir, "metrics.csv"),
+                             ["epoch", "step", "test_acc", "test_loss", "lr"])
+            for (st, lo, ac) in mc:
+                clog.log(epoch=st // spe, step=st, test_acc=ac, test_loss=lo, lr=0)
+            done += 1
+            rec = [r for r in per_model_results[mdl["name"]] if r["recovered"]]
+            tag = (f"REC@{min(r['recovery_fraction'] for r in rec)*100:.2f}%" if rec else "DNR")
+            print(f"[ensemble] {done}/{len(models)} {mdl['name']:<22} ratio={mdl['ratio']:.4f} {tag}",
+                  flush=True)
 
     # 3) write plot-compatible per-model summaries
     for mdl in models:
@@ -107,7 +132,7 @@ def main():
             best = min(rec, key=lambda r: r["recovery_fraction"])
             rf, best_lr, rec_steps = best["recovery_fraction"], best["lr"], best["recovery_steps"]
         else:
-            rf, best_lr, rec_steps = cfg["budget_fraction"], min(rs, key=lambda r: r["best_loss"])["lr"], None
+            rf, best_lr, rec_steps = budget_fraction, min(rs, key=lambda r: r["best_loss"])["lr"], None
         run_dir = os.path.join("runs", mdl["name"])
         os.makedirs(run_dir, exist_ok=True)
         summary = {

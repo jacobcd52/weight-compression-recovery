@@ -260,9 +260,10 @@ def main():
     df_sorted = df.sort_values(["technique", "compression_ratio"])
     df_sorted.to_csv("results/summary.csv", index=False, columns=cols)
     print(f"wrote results/summary.csv ({len(df_sorted)} runs)")
-    make_plot(df, ratio_col="compression_ratio", out_name="pareto",
+    budget = float(df["recovery_fraction"].max())   # DNR points sit at the budget cap
+    make_plot(df, budget=budget, ratio_col="compression_ratio", out_name="pareto",
               subtitle="honest bytes incl. codebook/scale overhead")
-    make_plot(df, ratio_col="amortized_ratio", out_name="pareto_amortized",
+    make_plot(df, budget=budget, ratio_col="amortized_ratio", out_name="pareto_amortized",
               subtitle="amortized: size-independent codebook/scale overhead removed")
     make_baseline_curve()
     make_retrain_curves()

@@ -126,13 +126,13 @@ def build_html(df, fig_uri, complete, fig_uri_amortized=None, n_expected=29,
 <h1>Weight-compression recovery</h1>
 <p class="sub">Threat model: if an attacker steals a few compressed bytes of a trained model
 and has the training data, how cheaply can they retrain back to full accuracy?<br>
-ResNet-20 / CIFAR-10 (undertrained 50-epoch baseline) &middot; {status} &middot; generated {now}</p>
+ResNet-20 / CIFAR-10 (GroupNorm, best-LR baseline) &middot; {status} &middot; generated {now}</p>
 
 <div class="kpi">
-  <div class="b"><div class="n">{baseline_loss:.3f}</div><div class="l">baseline test loss (recover below)</div></div>
+  <div class="b"><div class="n">{baseline_loss:.3f}</div><div class="l">target loss (baseline @ epoch 30)</div></div>
   <div class="b"><div class="n">{baseline:.1f}%</div><div class="l">baseline test acc</div></div>
   <div class="b"><div class="n">{nrec}/{n}</div><div class="l">runs recovered</div></div>
-  <div class="b"><div class="n">10%</div><div class="l">retrain budget cap</div></div>
+  <div class="b"><div class="n">5%</div><div class="l">retrain budget cap</div></div>
 </div>
 
 <h2>What this measures</h2>
@@ -140,11 +140,12 @@ ResNet-20 / CIFAR-10 (undertrained 50-epoch baseline) &middot; {status} &middot;
 <li><b>Compression ratio</b> = compressed bytes / fp32 bytes of the conv+linear weights
 (honest byte counts: bitmask/index overhead, codebooks, U+V, etc.). Lower = more compressed.
 BatchNorm/biases are kept dense and excluded from both sides.</li>
-<li><b>Recovery</b> = retraining (dense-from-init, plain CE) until the full-test cross-entropy
-drops <b>below the baseline's own test loss</b>. The baseline is deliberately undertrained
-(50 epochs) so it is not overfit and this target is well-posed.</li>
-<li><b>Recovery cost</b> = retraining steps used / baseline steps, capped at 10%; a run that
-doesn't reach the bar in that budget is <b>DNR</b>.</li>
+<li><b>Recovery</b> = retraining (dense-from-init, plain CE; best of a small LR sweep) until the
+full-test loss drops to the loss a <b>30-epoch baseline</b> reaches. Using the epoch-30 loss (not
+the fully-converged loss) avoids the knife-edge of beating a fully-trained model.</li>
+<li><b>Recovery cost</b> = retraining steps / <b>30-epoch</b> steps, capped at <b>5%</b>; a run
+that doesn't reach the bar in that budget is <b>DNR</b>. 0% = the reconstruction already matches
+a 30-epoch model with no retraining.</li>
 <li><b>Amortized ratio</b> (2nd plot) removes the size-independent codebook/scale overhead to
 approximate the ratio at large model size.</li>
 </ul></div>
