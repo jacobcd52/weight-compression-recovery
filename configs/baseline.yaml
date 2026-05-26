@@ -6,7 +6,7 @@ seed: 42
 lr: 0.001
 weight_decay: 0.0005
 betas: [0.9, 0.999]
-epochs: 200
+epochs: 50              # undertrained on purpose: CIFAR-10 overfits badly by 200ep
 warmup_epochs: 5        # linear warmup, then cosine decay to 0
 batch_size: 128
 num_workers: 8

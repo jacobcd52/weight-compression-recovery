@@ -31,7 +31,8 @@ TECHNIQUES = {
     "quantize": "uniform per-tensor symmetric scalar quantization",
     "kmeans": "per-tensor k-means weight sharing",
     "magprune_quant": "magnitude-prune then quantize the kept values",
-    "additive_vq": "AQLM-style additive multi-codebook VQ with shared global codebooks",
+    "additive_vq": "additive multi-codebook VQ with shared global codebooks (simplified)",
+    "aqlm": "AQLM: activation-aware per-layer additive quantization (paper reproduction)",
 }
 
 
@@ -421,10 +422,187 @@ def _additive_vq_reconstruct(pl, shape, codebooks):
 
 
 # --------------------------------------------------------------------------- #
+# AQLM — activation-aware additive quantization (Egiazarian et al., arXiv 2401.06118)
+# --------------------------------------------------------------------------- #
+# Faithful adaptation to a CIFAR conv net:
+#   * PER-LAYER codebooks (M codebooks of 2^b codewords over input-groups of d).
+#   * ACTIVATION-AWARE: each input dimension j is weighted by its calibration
+#     activation energy  H_jj = sum_calib x_j^2  (the diagonal of the layer Hessian
+#     X X^T; for conv layers X is the im2col patch matrix). This is the dominant
+#     activation-aware effect (cf. AWQ/Wanda) — we use the diagonal, not the full
+#     off-diagonal Hessian.
+#   * Per-output-channel scales, residual-k-means init, weighted greedy residual
+#     code assignment, and alternating weighted-least-squares codebook updates.
+# (Simplifications vs. full AQLM: diagonal — not full — Hessian, and greedy — not
+#  beam-search — code assignment. Documented; see RESULTS.)
+
+def _aqlm_importance(state_dict, ckeys, train_loader, device, n_batches=4):
+    """Per-input-dimension activation energy (diagonal Hessian) for each layer,
+    aligned with weight.reshape(out, -1) column order."""
+    import torch.nn as nn
+    import torch.nn.functional as F
+    from .models import resnet20
+
+    model = resnet20().to(device)
+    model.load_state_dict(state_dict)
+    model.eval()
+
+    name2key = {}
+    imp = {}
+    handles = []
+    for name, m in model.named_modules():
+        key = f"{name}.weight"
+        if key not in ckeys:
+            continue
+        name2key[name] = key
+        imp[key] = None
+
+        def make_hook(mod, k):
+            def hook(module, inp):
+                x = inp[0].detach()
+                if isinstance(module, nn.Conv2d):
+                    cols = F.unfold(x, kernel_size=module.kernel_size,
+                                    dilation=module.dilation, padding=module.padding,
+                                    stride=module.stride)          # (N, Cin*kh*kw, L)
+                    e = (cols ** 2).sum(dim=(0, 2))                 # (Cin*kh*kw,)
+                else:  # Linear
+                    xf = x.reshape(-1, x.shape[-1])
+                    e = (xf ** 2).sum(dim=0)                        # (in,)
+                imp[k] = e if imp[k] is None else imp[k] + e
+            return hook
+
+        handles.append(m.register_forward_pre_hook(make_hook(m, key)))
+
+    it = iter(train_loader)
+    with torch.no_grad():
+        for _ in range(n_batches):
+            try:
+                x, _ = next(it)
+            except StopIteration:
+                break
+            model(x.to(device))
+    for h in handles:
+        h.remove()
+    return {k: v.detach().cpu().numpy().astype(np.float64) for k, v in imp.items()}
+
+
+def _rvq_init(X, M, K, seed):
+    from sklearn.cluster import MiniBatchKMeans
+    codebooks = []
+    residual = X.astype(np.float32).copy()
+    for m in range(M):
+        nk = min(K, residual.shape[0])
+        km = MiniBatchKMeans(n_clusters=nk, random_state=seed + m, n_init=3,
+                             batch_size=max(256, nk * 4))
+        km.fit(residual)
+        cb = np.zeros((K, X.shape[1]), np.float32)
+        cb[:nk] = km.cluster_centers_.astype(np.float32)
+        codebooks.append(cb)
+        residual = residual - cb[km.predict(residual)]
+    return codebooks
+
+
+def _wgreedy_encode(sub, codebooks, w):
+    """Weighted greedy residual encoding. sub (n,d); w (d,) per-dim weights.
+    Returns codes (n, M)."""
+    n = sub.shape[0]
+    M = len(codebooks)
+    res = sub.astype(np.float32).copy()
+    codes = np.zeros((n, M), np.int64)
+    for m in range(M):
+        cb = codebooks[m]                                   # (K, d)
+        # weighted sq dist (drop the per-row constant ||res||^2_w):
+        d2 = (-2.0 * (res * w) @ cb.T) + ((cb * cb) @ w)[None, :]
+        a = d2.argmin(1)
+        codes[:, m] = a
+        res = res - cb[a]
+    return codes
+
+
+def _wls_codebooks(Wb, codes, wts, M, K, d):
+    """Weighted least-squares codebook update (per output-dim e).
+    Wb (out,G,d); codes (out,G,M); wts (G,d)."""
+    out, G, _ = Wb.shape
+    n = out * G
+    cols = codes.reshape(n, M) + (np.arange(M) * K)[None, :]   # (n, M) flat col idx
+    gidx = np.tile(np.arange(G), out)                          # block index per row
+    Wf = Wb.reshape(n, d)
+    MK = M * K
+    codebooks = [np.zeros((K, d), np.float32) for _ in range(M)]
+    for e in range(d):
+        we = wts[gidx, e].astype(np.float64)                  # (n,) weight for this dim
+        xe = Wf[:, e].astype(np.float64)
+        AtA = np.zeros((MK, MK)); Atx = np.zeros(MK)
+        for i in range(M):
+            ci = cols[:, i]
+            np.add.at(Atx, ci, we * xe)
+            for j in range(M):
+                np.add.at(AtA, (ci, cols[:, j]), we)
+        AtA += 1e-6 * np.eye(MK)
+        B = np.linalg.solve(AtA, Atx)                         # (MK,)
+        for m in range(M):
+            codebooks[m][:, e] = B[m * K:(m + 1) * K]
+    return codebooks
+
+
+def _aqlm_payload(w, imp, M, b, d, seed, n_iters=3):
+    K = 1 << b
+    shape = tuple(w.shape)
+    out = shape[0]
+    W = w.reshape(out, -1).numpy().astype(np.float32)         # (out, in)
+    inf = W.shape[1]
+    s = np.maximum(W.std(axis=1, keepdims=True), 1e-8)        # (out,1) per-output scale
+    Wn = W / s
+    inp = int(math.ceil(inf / d) * d)
+    pad = inp - inf
+    if pad:
+        Wn = np.pad(Wn, ((0, 0), (0, pad)))
+        imp = np.pad(imp.astype(np.float64), (0, pad))
+    G = inp // d
+    Wb = Wn.reshape(out, G, d)
+    wts = imp.reshape(G, d)
+    wts = wts / (wts.mean() + 1e-12)                          # normalize ~O(1)
+
+    codebooks = _rvq_init(Wb.reshape(out * G, d), M, K, seed)
+    codes = np.zeros((out, G, M), np.int64)
+    for _ in range(n_iters):
+        for g in range(G):
+            codes[:, g, :] = _wgreedy_encode(Wb[:, g, :], codebooks, wts[g])
+        codebooks = _wls_codebooks(Wb, codes, wts, M, K, d)
+    for g in range(G):
+        codes[:, g, :] = _wgreedy_encode(Wb[:, g, :], codebooks, wts[g])
+
+    code_bits = out * G * M * b
+    codebook_bytes = M * K * d * 2                            # fp16, per layer
+    scale_bytes = out * 4
+    return {"kind": "aqlm",
+            "codes": codes.astype(np.int32),
+            "codebooks": np.stack(codebooks).astype(np.float16),  # (M,K,d)
+            "scale": s.reshape(-1).astype(np.float32),
+            "pad": int(pad), "G": int(G),
+            "bytes": int(math.ceil(code_bits / 8) + codebook_bytes + scale_bytes)}
+
+
+def _aqlm_reconstruct(pl, shape):
+    cb = pl["codebooks"].astype(np.float32)                   # (M,K,d)
+    codes = pl["codes"].astype(np.int64)                      # (out,G,M)
+    out, G, M = codes.shape
+    d = cb.shape[2]
+    recon = np.zeros((out, G, d), np.float32)
+    for m in range(M):
+        recon += cb[m][codes[:, :, m]]
+    flat = recon.reshape(out, G * d)
+    inf = int(np.prod(shape[1:]))
+    flat = flat[:, :inf] * pl["scale"][:, None]
+    return torch.from_numpy(flat.reshape(shape)).float()
+
+
+# --------------------------------------------------------------------------- #
 # top-level dispatch
 # --------------------------------------------------------------------------- #
 
 _RECONSTRUCT = {
+    "aqlm": _aqlm_reconstruct,
     "sparse": _sparse_reconstruct,
     "lowrank": _lowrank_reconstruct,
     "quant": _quantize_reconstruct,
@@ -449,12 +627,15 @@ def compress(state_dict, technique, knob, *, train_loader=None, device=None,
                                      passthrough, M, b, d, seed, knob)
 
     scores = None
+    importance = None
     if technique == "snip":
         scores = _grad_scores(state_dict, ckeys, train_loader, device,
                               n_batches=1, square=False)
     elif technique == "fisher_prune":
         scores = _grad_scores(state_dict, ckeys, train_loader, device,
                               n_batches=10, square=True)
+    elif technique == "aqlm":
+        importance = _aqlm_importance(state_dict, ckeys, train_loader, device)
 
     rng = np.random.RandomState(seed)
     compressed = {}
@@ -476,6 +657,9 @@ def compress(state_dict, technique, knob, *, train_loader=None, device=None,
         elif technique == "magprune_quant":
             keep_fraction, bits = knob
             pl = _magprune_quant_payload(w, float(keep_fraction), int(bits))
+        elif technique == "aqlm":
+            M, b, dd = (int(x) for x in knob)
+            pl = _aqlm_payload(w, importance[k], M, b, dd, seed)
         else:  # pragma: no cover
             raise ValueError(technique)
         compressed[k] = pl
@@ -549,6 +733,7 @@ if __name__ == "__main__":
         ("kmeans", 6, 0.5),
         ("magprune_quant", (0.1, 4), None),
         ("additive_vq", [2, 8, 8], 0.8),  # 2 codebooks x 256 over dim-8 groups
+        ("aqlm", [2, 8, 8], 0.8),         # activation-aware per-layer additive quant
     ]
 
     all_ok = True
