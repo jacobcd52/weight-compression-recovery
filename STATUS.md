@@ -1,34 +1,29 @@
 # STATUS
 
-updated: 2026-05-26T03:25:00Z
-state: DONE
-phase: v2 sweep complete (test-loss, undertrained baseline, full AQLM, amortized plot)
+updated: 2026-05-26T05:20:00Z
+state: BUILDING (vmap ensemble) + SWEEP_RUNNING (v4 BN reference)
+phase: speedups -> vectorized ensemble evaluator; LR-swept recovery metric
 gpu: NVIDIA GeForce RTX 4090, ~24 GB
-next: awaiting human
 
 ## Now
-DONE. v2 sweep complete (29 runs). Two Pareto plots (honest + amortized) + baseline curve + table
-all embedded in the clickable report. Pushed; live page refreshed.
-- Report: https://jacobcd52.github.io/weight-compression-recovery/
+- v4 BatchNorm sweep (LR-swept recovery, concurrency 4) finishing: 18/29. This is the reference frontier.
+- Built the **vmap ensemble evaluator** (src/ensemble.py) + GroupNorm ResNet-20 + orchestration
+  (src/sweep_ensemble.py). CPU-validated. Waiting for v4 to free the GPU, then: train GN baseline,
+  run the ensemble sweep, validate vs per-process, measure speedup, regenerate frontier.
 
-## Result summary (v2)
-- Undertrained 50-epoch baseline: test loss 0.401, acc 88.1%. Recovery = test loss < 0.401 (strict).
-- Recovery cost ~constant ~7% for all recovering methods (schedule artifact) → the real axis is
-  max compression that recovers.
-- Recoverable frontier ~32x (amortized ~0.031): quantize_1, additive_vq_1_8_8, aqlm_2_4_8.
-- AMORTIZED plot (codebook/scale overhead removed): AQLM jumps from full 0.218 -> amortized 0.0625
-  and recovers @7% — competitive with kmeans/quantize/additive_vq. Honest bytes penalize AQLM's
-  per-layer codebooks on a 270k model; amortized shows it's fine at scale. VQ family ~tied here.
+## Key decisions this session
+- Recovery metric = TEST LOSS below the (undertrained 50-epoch) baseline; cost = MIN over a small
+  peak-LR sweep {3e-5,1e-4,3e-4,1e-3} (the retraining recipe is part of the method).
+- Diagnostic proved the old ~7% was an LR-schedule artifact (easy inits recover ~33x cheaper at low LR;
+  hard inits need the cosine anneal). Live report has the loss curves.
+- Speedups: across-model concurrency (~2x measured; GPU was ~55% util, time-sliced) + exact LR pruning.
+  Decided to go further with the **vmap ensemble** (GroupNorm => stateless => vmap-clean): trains
+  (init x LR) configs vectorized in one batched pass; eval (the real bottleneck) done batched too.
+- Auto-research orchestration plan: cheap concurrent LLM proposals -> single batched (vmap) GPU
+  evaluator; recipe parameterized so candidates stay vmappable; MPS only as escape hatch.
 
-## Recent (most recent first)
-- 2026-05-26T03:25Z — v2 sweep done (29 runs); amortized + honest plots + baseline curve in report
-- 2026-05-26T02:35Z — launched v2 sweep
-- 2026-05-26T02:20Z — 50-epoch baseline + full AQLM
+## Next
+- Plan 1 (SimpleStories-V2-11M LM) once the image-side eval engine is solid; ~free compute, ~half-day eng.
 
-## Open runs / Issues
-- none
-
-## Backlog / future
-- ~50M-param LLM middle ground (where AQLM codebook tax amortizes); then maybe 1.5B (see SCALING.md).
-- Decouple the recovery-schedule confound (recovery cost is ~constant ~7% under the current recipe).
-- Full-Hessian + beam-search AQLM (current uses diagonal Hessian + greedy codes).
+## Issues / flags
+none.
