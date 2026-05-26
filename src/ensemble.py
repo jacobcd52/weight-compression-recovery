@@ -22,6 +22,17 @@ from torch.func import functional_call, grad, vmap
 from .models import resnet20
 
 
+def _should_eval(step, budget):
+    """Adaptive eval cadence: dense early (fast recoveries cross in the first ~100 steps),
+    sparse late. Eval is the dominant cost in the vectorized ensemble, so this is the main
+    speed lever; the early density keeps fine resolution where crossings actually happen."""
+    if step <= 100:
+        return step % 10 == 0
+    if step <= 500:
+        return step % 25 == 0
+    return step % 100 == 0
+
+
 def _lr_factor(step, warmup, total):
     if step < warmup:
         return (step + 1) / warmup
@@ -65,7 +76,7 @@ def _ensemble_eval(model, pdict, test_loader, device, use_bf16=True):
 def run_ensemble(inits, lrs, *, baseline_loss, baseline_steps, budget_steps, warmup_steps,
                  eval_every, train_loader, test_loader, device, norm="group", groups=8,
                  num_classes=10, weight_decay=5e-4, betas=(0.9, 0.999), eps=1e-8,
-                 use_bf16=True, log_prefix=""):
+                 use_bf16=True, log_prefix="", stop_on_any=True):
     """Vectorized-train one chunk of configs. `inits`: list of W state_dicts; `lrs`: list of
     W peak LRs. Returns list of per-config dicts {recovered, recovery_steps, best_loss}."""
     model = resnet20(num_classes=num_classes, norm=norm, groups=groups).to(device)
@@ -100,10 +111,16 @@ def run_ensemble(inits, lrs, *, baseline_loss, baseline_steps, budget_steps, war
                 active[i] = 0.0                            # freeze: this config recovered
         return losses
 
+    def stop_now():
+        # W=4 LRs of one method: stop as soon as ANY LR crosses (= the min recovery).
+        if stop_on_any:
+            return any(r is not None for r in rec_step)
+        return active.sum().item() == 0                    # all configs crossed
+
     step = 0
     it = iter(train_loader)
     do_eval(0)                                             # init eval (records trivial recoveries)
-    while step < budget_steps and active.sum() > 0:
+    while step < budget_steps and not stop_now():
         try:
             x, y = next(it)
         except StopIteration:
@@ -125,13 +142,10 @@ def run_ensemble(inits, lrs, *, baseline_loss, baseline_steps, budget_steps, war
             vhat = v[n] / (1 - b2 ** step)
             lrb = _bcast(lr_t, pdict[n].dim())
             pdict[n].add_(-lrb * (mhat / (vhat.sqrt() + eps) + weight_decay * pdict[n]))
-        if step % eval_every == 0:
+        if _should_eval(step, budget_steps):
             do_eval(step)
-            if step % (eval_every * 10) == 0:
-                print(f"[ens{log_prefix}] step {step}/{budget_steps} "
-                      f"active {int(active.sum())}/{W} "
-                      f"min_loss {min(best_loss):.4f}", flush=True)
-    do_eval(step, final=True)
+    if not stop_now():
+        do_eval(step, final=True)
 
     return [{"recovered": rec_step[i] is not None,
              "recovery_steps": rec_step[i],

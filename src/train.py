@@ -22,10 +22,15 @@ def main():
     ap.add_argument("--config", required=True)
     ap.add_argument("--smoke", action="store_true",
                     help="2 epochs, 1024-image subset, for a fast pipeline check")
+    ap.add_argument("--lr", type=float, default=None, help="override cfg lr (for LR sweep)")
+    ap.add_argument("--run-name", default=None, help="override run_name")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
-    run_name = "baseline_smoke" if args.smoke else cfg.get("run_name", "baseline")
+    if args.lr is not None:
+        cfg["lr"] = args.lr
+    run_name = (args.run_name if args.run_name else
+                ("baseline_smoke" if args.smoke else cfg.get("run_name", "baseline")))
     run_dir = os.path.join("runs", run_name)
     os.makedirs(run_dir, exist_ok=True)
 

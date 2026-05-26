@@ -65,26 +65,24 @@ def main():
 
     # 2) run the ensemble in model-chunks (each chunk: G models x len(lr_grid) configs)
     K = len(lr_grid)
-    G = max(1, args.chunk_models)
+    # One method at a time: vmap its K LRs (W=K), stop the moment ANY LR crosses
+    # (= the min recovery over LRs). Methods run in series. Fast methods exit in a step
+    # or two instead of dragging a wide batch to full budget.
     per_model_results = {}
-    for c0 in range(0, len(models), G):
-        chunk = models[c0:c0 + G]
-        inits, lrs, owner = [], [], []
-        for mi, mdl in enumerate(chunk):
-            for lr in lr_grid:
-                inits.append(mdl["init"]); lrs.append(lr); owner.append(mi)
-        print(f"[ensemble] chunk {c0//G}: {len(chunk)} models x {K} LRs = {len(inits)} configs",
-              flush=True)
-        res = run_ensemble(inits, lrs, baseline_loss=baseline_loss,
+    for mi, mdl in enumerate(models):
+        inits = [mdl["init"]] * K
+        res = run_ensemble(inits, list(lr_grid), baseline_loss=baseline_loss,
                            baseline_steps=baseline_steps, budget_steps=budget_steps,
                            warmup_steps=warmup_steps, eval_every=eval_every,
                            train_loader=train_loader, test_loader=test_loader,
                            device=device, norm=norm, num_classes=10,
                            weight_decay=cfg["weight_decay"], betas=tuple(cfg["betas"]),
-                           log_prefix=f" c{c0//G}")
-        for mi, mdl in enumerate(chunk):
-            rs = [res[j] for j in range(len(res)) if owner[j] == mi]
-            per_model_results[mdl["name"]] = rs
+                           stop_on_any=True, log_prefix=f" {mdl['name']}")
+        per_model_results[mdl["name"]] = res
+        rec = [r for r in res if r["recovered"]]
+        tag = (f"REC@{min(r['recovery_fraction'] for r in rec)*100:.2f}%" if rec else "DNR")
+        print(f"[ensemble] {mi+1}/{len(models)} {mdl['name']:<22} ratio={mdl['ratio']:.4f} {tag}",
+              flush=True)
 
     # 3) write plot-compatible per-model summaries
     for mdl in models:
