@@ -72,7 +72,7 @@ def main():
 
     # Reconstruct dense init from compressed bits.
     init_sd = reconstruct(blob["compressed"])
-    model = resnet20().to(device)
+    model = resnet20(norm=cfg.get("norm", "batch"), groups=cfg.get("gn_groups", 8)).to(device)
     model.load_state_dict(init_sd)
 
     # Data
