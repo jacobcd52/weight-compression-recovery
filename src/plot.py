@@ -70,6 +70,63 @@ def make_baseline_curve(runs_dir="runs", out_dir="figures"):
     print(f"wrote {out_dir}/baseline_curve.png")
 
 
+RETRAIN_CURVE_RUNS = [
+    "quantize_8", "quantize_4", "quantize_1", "kmeans_6", "kmeans_2",
+    "additive_vq_2_8_8", "aqlm_2_8_8", "aqlm_2_4_8",
+    "magnitude_prune_0.5", "magprune_quant_0.1_4",
+]
+
+
+def make_retrain_curves(runs_dir="runs", out_dir="figures", names=None):
+    """Test-loss-vs-step curves for a curated set of retraining runs, to expose the
+    learning dynamics (high-LR bump early, dip below baseline late under cosine-to-0)."""
+    import csv, json
+    base = os.path.join(runs_dir, "baseline", "summary.json")
+    if not os.path.exists(base):
+        return
+    bs = json.load(open(base))["baseline_steps"]
+    names = names or RETRAIN_CURVE_RUNS
+    plt.rcParams.update({"font.size": 12})
+    fig, ax = plt.subplots(figsize=(10, 6))
+    cmap = plt.get_cmap("tab10")
+    bloss = None
+    plotted = 0
+    for i, name in enumerate(names):
+        d = os.path.join(runs_dir, name)
+        mpath, spath = os.path.join(d, "metrics.csv"), os.path.join(d, "summary.json")
+        if not (os.path.exists(mpath) and os.path.exists(spath)):
+            continue
+        s = json.load(open(spath))
+        if "final_test_loss" not in s:
+            continue
+        bloss = s.get("baseline_test_loss", bloss)
+        xs = [0.0]
+        ys = [s.get("init_loss", float("nan"))]
+        for r in csv.DictReader(open(mpath)):
+            if r.get("test_loss"):
+                xs.append(100.0 * int(r["step"]) / bs)
+                ys.append(float(r["test_loss"]))
+        rec = "✓" if s["recovered"] else "DNR"
+        ax.plot(xs, ys, color=cmap(i % 10), lw=1.6,
+                label=f"{name} [{rec}]")
+        plotted += 1
+    if bloss is not None:
+        ax.axhline(bloss, color="black", ls="--", lw=1.2, alpha=0.8,
+                   label=f"baseline loss {bloss:.3f} (recover below)")
+    ax.set_xlabel("retraining cost  (% of baseline steps)")
+    ax.set_ylabel("full-test loss")
+    ax.set_ylim(0.38, 0.85)
+    ax.set_title("Retraining dynamics: test loss vs. compute\n"
+                 "(note the early high-LR bump, then dip below baseline late in the cosine decay)")
+    ax.grid(alpha=.25)
+    ax.legend(fontsize=8, ncol=2, loc="upper right")
+    fig.tight_layout()
+    os.makedirs(out_dir, exist_ok=True)
+    fig.savefig(os.path.join(out_dir, "retrain_curves.png"), dpi=140)
+    plt.close(fig)
+    print(f"wrote {out_dir}/retrain_curves.png ({plotted} curves)")
+
+
 def attach_amortized(df, compressed_dir="compressed"):
     """Add an 'amortized_ratio' column: per-weight bytes only (codebook/scale overhead
     removed), computed from the saved compressed files. Approximates the ratio at large
@@ -202,6 +259,7 @@ def main():
     make_plot(df, ratio_col="amortized_ratio", out_name="pareto_amortized",
               subtitle="amortized: size-independent codebook/scale overhead removed")
     make_baseline_curve()
+    make_retrain_curves()
 
 
 if __name__ == "__main__":
