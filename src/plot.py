@@ -37,12 +37,35 @@ def load_summaries(runs_dir="runs"):
     return pd.DataFrame(rows)
 
 
-def pareto_front(df):
+def attach_amortized(df, compressed_dir="compressed"):
+    """Add an 'amortized_ratio' column: per-weight bytes only (codebook/scale overhead
+    removed), computed from the saved compressed files. Approximates the ratio at large
+    model size. Falls back to the full ratio if the compressed file is missing."""
+    import torch
+    from .compress import amortized_bytes
+    vals = []
+    for _, r in df.iterrows():
+        base = r["run_name"]
+        for suf in ("_distill", "_fine", "_smoke"):
+            if base.endswith(suf):
+                base = base[: -len(suf)]
+        p = os.path.join(compressed_dir, base + ".pt")
+        if os.path.exists(p):
+            blob = torch.load(p, map_location="cpu", weights_only=False)
+            vals.append(amortized_bytes(blob["compressed"]) / blob["baseline_bytes"])
+        else:
+            vals.append(r["compression_ratio"])
+    df = df.copy()
+    df["amortized_ratio"] = vals
+    return df
+
+
+def pareto_front(df, ratio_col="compression_ratio"):
     """Lower-left Pareto front over recovered runs (min ratio & min recovery_fraction)."""
     rec = df[df["recovered"]].copy()
     if rec.empty:
         return rec
-    rec = rec.sort_values(["compression_ratio", "recovery_fraction"])
+    rec = rec.sort_values([ratio_col, "recovery_fraction"])
     front, best_y = [], float("inf")
     for _, r in rec.iterrows():
         if r["recovery_fraction"] <= best_y + 1e-12:
@@ -51,7 +74,8 @@ def pareto_front(df):
     return pd.DataFrame(front)
 
 
-def make_plot(df, out_dir="figures", budget=0.10):
+def make_plot(df, out_dir="figures", budget=0.10, ratio_col="compression_ratio",
+              out_name="pareto", subtitle="honest byte accounting"):
     os.makedirs(out_dir, exist_ok=True)
     techniques = sorted(df["technique"].unique())
     cmap = plt.get_cmap("tab10")
@@ -66,31 +90,31 @@ def make_plot(df, out_dir="figures", budget=0.10):
         for distill, marker in [(False, "o"), (True, "^")]:
             d = sub[(sub["did_distill"] == distill) & (sub["recovered"])]
             if not d.empty:
-                ax.scatter(d["compression_ratio"], d["recovery_fraction"],
+                ax.scatter(d[ratio_col], d["recovery_fraction"],
                            s=90, color=c, marker=marker, edgecolors="k",
                            linewidths=0.5, zorder=3)
             dnr = sub[(sub["did_distill"] == distill) & (~sub["recovered"])]
             if not dnr.empty:
-                ax.scatter(dnr["compression_ratio"], [budget] * len(dnr),
+                ax.scatter(dnr[ratio_col], [budget] * len(dnr),
                            s=110, color=c, marker=marker, facecolors="none",
                            linewidths=1.6, zorder=3)
                 for _, r in dnr.iterrows():
-                    ax.annotate("", xy=(r["compression_ratio"] * 1.6, budget),
-                                xytext=(r["compression_ratio"], budget),
+                    ax.annotate("", xy=(r[ratio_col] * 1.6, budget),
+                                xytext=(r[ratio_col], budget),
                                 arrowprops=dict(arrowstyle="->", color=c, lw=1.4),
                                 zorder=2)
 
-    front = pareto_front(df)
+    front = pareto_front(df, ratio_col)
     if len(front) >= 1:
-        front = front.sort_values("compression_ratio")
-        ax.plot(front["compression_ratio"], front["recovery_fraction"],
+        front = front.sort_values(ratio_col)
+        ax.plot(front[ratio_col], front["recovery_fraction"],
                 "-", color="black", lw=2.0, alpha=0.7, zorder=4)
 
     ax.axhline(budget, color="grey", ls="--", lw=1.0, alpha=0.7)
 
     ax.set_xscale("log")
     ax.set_yscale("log")
-    ax.set_xlabel("Compression ratio  (compressed / fp32 bytes; lower = more compressed)")
+    ax.set_xlabel(f"Compression ratio  ({subtitle}; lower = more compressed)")
     ax.set_ylabel("Recovery cost  (retrain steps / baseline steps, log)")
     ax.set_ylim(8e-4, budget * 1.35)
     ax.set_title("Weight-compression recovery: compression vs. retraining cost\n"
@@ -118,8 +142,8 @@ def make_plot(df, out_dir="figures", budget=0.10):
     ax.legend(handles=style_handles, loc="lower right", fontsize=9, framealpha=0.93)
     fig.tight_layout()
 
-    png = os.path.join(out_dir, "pareto.png")
-    pdf = os.path.join(out_dir, "pareto.pdf")
+    png = os.path.join(out_dir, f"{out_name}.png")
+    pdf = os.path.join(out_dir, f"{out_name}.pdf")
     fig.savefig(png, dpi=150)
     fig.savefig(pdf)
     plt.close(fig)
@@ -131,16 +155,20 @@ def main():
     if df.empty:
         print("no retrain summaries found yet")
         return
+    df = attach_amortized(df)
     os.makedirs("results", exist_ok=True)
     cols = ["run_name", "technique", "knob", "mode", "did_distill",
-            "compression_ratio", "compressed_bytes", "recovered",
-            "recovery_steps", "recovery_fraction", "init_acc",
-            "final_test_acc", "baseline_test_acc"]
+            "compression_ratio", "amortized_ratio", "compressed_bytes", "recovered",
+            "recovery_steps", "recovery_fraction", "init_acc", "init_loss",
+            "final_test_acc", "final_test_loss", "baseline_test_acc", "baseline_test_loss"]
     cols = [c for c in cols if c in df.columns]
     df_sorted = df.sort_values(["technique", "compression_ratio"])
     df_sorted.to_csv("results/summary.csv", index=False, columns=cols)
     print(f"wrote results/summary.csv ({len(df_sorted)} runs)")
-    make_plot(df)
+    make_plot(df, ratio_col="compression_ratio", out_name="pareto",
+              subtitle="honest bytes incl. codebook/scale overhead")
+    make_plot(df, ratio_col="amortized_ratio", out_name="pareto_amortized",
+              subtitle="amortized: size-independent codebook/scale overhead removed")
 
 
 if __name__ == "__main__":

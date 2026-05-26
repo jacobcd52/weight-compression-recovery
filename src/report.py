@@ -29,9 +29,10 @@ def _findings(df):
     n = len(df)
     rec = df[df["recovered"]]
     nrec = len(rec)
-    out.append(f"<b>{nrec} of {n}</b> (technique, knob) runs recovered to within 0.5 pp "
-               f"of the {df['baseline_test_acc'].iloc[0]:.2f}% baseline within the 10% "
-               f"retraining budget; the rest are <b>DNR</b> (did not recover in budget).")
+    bloss = df["baseline_test_loss"].iloc[0] if "baseline_test_loss" in df else float("nan")
+    out.append(f"<b>{nrec} of {n}</b> (technique, knob) runs recovered — i.e. retrained to a "
+               f"full-test loss below the baseline's {bloss:.3f} within the 10% budget; the rest "
+               f"are <b>DNR</b> (did not recover in budget). Recovery metric = test loss.")
     if nrec:
         # most-compressed recovery
         mc = rec.sort_values("compression_ratio").iloc[0]
@@ -50,10 +51,12 @@ def _findings(df):
                    ", ".join(html.escape(t) for t in techs) + "</b>.")
     dnr_techs = sorted(set(df["technique"]) - set(rec["technique"]))
     if dnr_techs:
-        out.append("Techniques that never recovered in budget: <b>" +
-                   ", ".join(html.escape(t) for t in dnr_techs) +
-                   "</b> — these destroy weight structure (zeroing / low-rank), and 20 epochs "
-                   "is not enough to climb back.")
+        out.append("Techniques with no recovery in budget: <b>" +
+                   ", ".join(html.escape(t) for t in dnr_techs) + "</b>.")
+    out.append("The <b>amortized</b> plot below re-counts the compression ratio without the "
+               "size-independent codebook/scale overhead (a large fixed cost on a 270k-param "
+               "model) — approximating the ratio at large model size, which especially helps "
+               "the vector-quantization methods (k-means, additive_vq, AQLM).")
     return out
 
 
@@ -87,12 +90,12 @@ background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1
 """
 
 
-def build_html(df, fig_uri, complete):
+def build_html(df, fig_uri, complete, fig_uri_amortized=None, n_expected=29):
     now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     baseline = df["baseline_test_acc"].iloc[0]
-    threshold = baseline - 0.5
+    baseline_loss = df["baseline_test_loss"].iloc[0] if "baseline_test_loss" in df else float("nan")
     n = len(df); nrec = int(df["recovered"].sum())
-    status = "Final" if complete else f"In progress ({n}/56 runs)"
+    status = "Final" if complete else f"In progress ({n}/{n_expected} runs)"
 
     findings = "".join(f"<li>{x}</li>" for x in _findings(df))
 
@@ -122,11 +125,11 @@ def build_html(df, fig_uri, complete):
 <h1>Weight-compression recovery</h1>
 <p class="sub">Threat model: if an attacker steals a few compressed bytes of a trained model
 and has the training data, how cheaply can they retrain back to full accuracy?<br>
-ResNet-20 / CIFAR-10 &middot; {status} &middot; generated {now}</p>
+ResNet-20 / CIFAR-10 (undertrained 50-epoch baseline) &middot; {status} &middot; generated {now}</p>
 
 <div class="kpi">
-  <div class="b"><div class="n">{baseline:.2f}%</div><div class="l">baseline test acc</div></div>
-  <div class="b"><div class="n">{threshold:.2f}%</div><div class="l">recovery threshold</div></div>
+  <div class="b"><div class="n">{baseline_loss:.3f}</div><div class="l">baseline test loss (recover below)</div></div>
+  <div class="b"><div class="n">{baseline:.1f}%</div><div class="l">baseline test acc</div></div>
   <div class="b"><div class="n">{nrec}/{n}</div><div class="l">runs recovered</div></div>
   <div class="b"><div class="n">10%</div><div class="l">retrain budget cap</div></div>
 </div>
@@ -136,21 +139,31 @@ ResNet-20 / CIFAR-10 &middot; {status} &middot; generated {now}</p>
 <li><b>Compression ratio</b> = compressed bytes / fp32 bytes of the conv+linear weights
 (honest byte counts: bitmask/index overhead, codebooks, U+V, etc.). Lower = more compressed.
 BatchNorm/biases are kept dense and excluded from both sides.</li>
-<li><b>Recovery</b> = reaching test accuracy within 0.5 pp of baseline on the full 10k test set.</li>
-<li><b>Recovery fraction</b> = retraining steps used / baseline steps. Capped at 10%
-(20 epochs vs the 200-epoch baseline); a run that doesn't reach the bar in that budget is
-<b>DNR</b>. Reconstructed weights are used as a dense init and retrained with the same recipe.</li>
+<li><b>Recovery</b> = retraining (dense-from-init, plain CE) until the full-test cross-entropy
+drops <b>below the baseline's own test loss</b>. The baseline is deliberately undertrained
+(50 epochs) so it is not overfit and this target is well-posed.</li>
+<li><b>Recovery cost</b> = retraining steps used / baseline steps, capped at 10%; a run that
+doesn't reach the bar in that budget is <b>DNR</b>.</li>
+<li><b>Amortized ratio</b> (2nd plot) removes the size-independent codebook/scale overhead to
+approximate the ratio at large model size.</li>
 </ul></div>
 
 <h2>Headline findings</h2>
 <div class="card"><ul>{findings}</ul></div>
 
-<h2>Pareto frontier</h2>
+<h2>Pareto frontier — honest bytes</h2>
 <div class="card">{('<img alt="Pareto frontier" src="'+fig_uri+'">') if fig_uri else
 '<p class="sub">figure pending — will appear when plotting runs.</p>'}
 <p class="sub">x = compression ratio (log, left = more compressed); y = fraction of original
-training cost needed to recover (lower = cheaper). Open markers at the top = DNR. Circles =
-plain retraining, triangles = distillation. Black line = Pareto frontier.</p></div>
+training cost needed to recover (log, lower = cheaper). Open markers at the top = DNR. Circles =
+plain, triangles = distillation. Black line = Pareto frontier.</p></div>
+
+<h2>Pareto frontier — amortized (large-model proxy)</h2>
+<div class="card">{('<img alt="Amortized Pareto frontier" src="'+fig_uri_amortized+'">')
+if fig_uri_amortized else '<p class="sub">amortized figure pending.</p>'}
+<p class="sub">Same as above but the x-axis counts only per-weight bytes (codes/values/indices),
+dropping the size-independent codebook and scale overhead that dominates on a tiny 270k-param
+model. This is the ratio the vector-quantization methods would approach at large model size.</p></div>
 
 <h2>All runs</h2>
 <div class="card" style="overflow:auto;max-height:640px">
@@ -171,13 +184,14 @@ def main():
         return
     os.makedirs("docs", exist_ok=True)
     fig_uri = _img_data_uri("figures/pareto.png")
-    # "complete" if all 56 expected runs are present
-    complete = len(df) >= 56
-    htmltext = build_html(df, fig_uri, complete)
+    fig_uri_amortized = _img_data_uri("figures/pareto_amortized.png")
+    n_expected = 29
+    complete = len(df) >= n_expected
+    htmltext = build_html(df, fig_uri, complete, fig_uri_amortized, n_expected)
     with open("docs/index.html", "w") as f:
         f.write(htmltext)
     print(f"wrote docs/index.html ({len(df)} runs, complete={complete}, "
-          f"figure={'embedded' if fig_uri else 'missing'})")
+          f"figures={'2' if fig_uri and fig_uri_amortized else 'partial'})")
 
 
 if __name__ == "__main__":

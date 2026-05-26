@@ -701,6 +701,39 @@ def compression_ratio(compressed, original_state_dict):
     return c / b
 
 
+def overhead_bytes(compressed):
+    """Size-independent (or sub-linear) bytes: codebooks and scales. These are a
+    fixed/per-layer cost that vanishes as a fraction at large model size. The
+    'amortized' ratio subtracts these, counting only the per-weight code/value/index
+    bytes that scale ~linearly with the number of weights — approximating the
+    compression ratio one would get on a much larger model."""
+    payload = compressed["payload"]
+    comp = payload["compressed"]
+    ov = 0
+    shared = payload.get("shared")
+    if shared is not None:  # additive_vq: global codebook (fp16), counted once
+        ov += int(sum(cb.size for cb in shared["codebooks"]) * 2)
+    for pl in comp.values():
+        kind = pl["kind"]
+        if kind == "quant":
+            ov += 4                                   # per-tensor fp32 scale
+        elif kind == "kmeans":
+            ov += int(pl["codebook"].size * 4)        # per-tensor fp32 codebook
+        elif kind == "magprune_quant":
+            ov += 4                                   # per-tensor fp32 scale
+        elif kind == "additive_vq":
+            ov += 4                                   # per-tensor scale (codebook in 'shared')
+        elif kind == "aqlm":
+            ov += int(pl["codebooks"].size * 2 + pl["scale"].size * 4)  # per-layer cb + scales
+        # sparse / lowrank: no size-independent overhead
+    return int(ov)
+
+
+def amortized_bytes(compressed):
+    """Per-weight bytes only (total minus size-independent overhead)."""
+    return int(compressed["bytes"]) - overhead_bytes(compressed)
+
+
 # --------------------------------------------------------------------------- #
 # unit-style tests
 # --------------------------------------------------------------------------- #
