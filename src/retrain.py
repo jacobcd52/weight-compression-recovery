@@ -96,38 +96,48 @@ def main():
     if warmup_steps is None:
         warmup_steps = cfg["warmup_epochs"] * steps_per_epoch
 
-    optimizer = build_optimizer(model, cfg)
-    scheduler = build_scheduler(optimizer, budget_steps, warmup_steps)
-
-    teacher = None
-    if did_distill:
-        teacher = load_teacher(baseline_dir, device)
-
-    tb = SummaryWriter(log_dir=os.path.join(run_dir, "tb"))
-    csv_logger = CSVLogger(os.path.join(run_dir, "metrics.csv"),
-                           ["epoch", "step", "test_acc", "test_loss", "lr"])
-
-    # init metrics before any retraining (informative)
+    import shutil
     from .utils import eval_full
-    init_acc, init_loss = eval_full(model, test_loader, device)
+    teacher = load_teacher(baseline_dir, device) if did_distill else None
+    lr_grid = cfg.get("lr_grid", [cfg["lr"]])
 
+    init_acc, init_loss = eval_full(model, test_loader, device)
     print(f"[retrain] run={run_name} tech={technique} knob={knob} mode={args.mode} "
           f"ratio={compression_ratio:.4f} init_acc={init_acc:.2f} init_loss={init_loss:.4f} "
           f"baseline_loss={baseline_loss:.4f} loss_threshold={loss_threshold:.4f} "
-          f"warmup={warmup_steps} budget_steps={budget_steps} (of {baseline_steps})",
-          flush=True)
+          f"warmup={warmup_steps} budget_steps={budget_steps} lr_grid={lr_grid}", flush=True)
 
-    results = train_loop(
-        model, train_loader, test_loader, device,
-        optimizer=optimizer, scheduler=scheduler, total_steps=budget_steps,
-        tb_writer=tb, csv_logger=csv_logger, loss_threshold=loss_threshold,
-        teacher=teacher, T=cfg["distill_T"], alpha=cfg["distill_alpha"],
-        eval_every_steps=cfg.get("eval_every_steps"))
+    # Recovery cost = MIN over a small LR sweep ("how cheaply can the attacker recover").
+    # The retraining recipe is part of the method; for now we sweep only the (cosine) peak LR.
+    lr_results, best = [], None
+    for lr in lr_grid:
+        model.load_state_dict(init_sd)                  # fresh init for each LR
+        cfg_lr = dict(cfg); cfg_lr["lr"] = lr
+        opt = build_optimizer(model, cfg_lr)
+        sch = build_scheduler(opt, budget_steps, warmup_steps)
+        csv_path = os.path.join(run_dir, f"metrics_lr{lr:.0e}.csv")
+        clog = CSVLogger(csv_path, ["epoch", "step", "test_acc", "test_loss", "lr"])
+        res = train_loop(
+            model, train_loader, test_loader, device,
+            optimizer=opt, scheduler=sch, total_steps=budget_steps,
+            tb_writer=None, csv_logger=clog, loss_threshold=loss_threshold,
+            teacher=teacher, T=cfg["distill_T"], alpha=cfg["distill_alpha"],
+            eval_every_steps=cfg.get("eval_every_steps"), log_prefix=f"lr{lr:.0e} ")
+        rf = res["recovery_steps"] / baseline_steps if res["recovered"] else None
+        lr_results.append({"lr": lr, "recovered": res["recovered"],
+                           "recovery_fraction": rf, "best_loss": res["best_loss"]})
+        # prefer recovered (then min recovery_fraction), else min best_loss
+        key = (0 if res["recovered"] else 1,
+               rf if rf is not None else float("inf"), res["best_loss"])
+        if best is None or key < best[0]:
+            best = (key, lr, res, csv_path)
+
+    _, best_lr, results, best_csv = best
+    shutil.copyfile(best_csv, os.path.join(run_dir, "metrics.csv"))  # best-LR curve for report
 
     recovery_steps = results["recovery_steps"]
     recovery_fraction = (recovery_steps / baseline_steps
-                         if recovery_steps is not None
-                         else cfg["budget_fraction"])  # DNR plotted at the cap
+                         if results["recovered"] else cfg["budget_fraction"])
 
     summary = {
         "run_name": run_name,
@@ -142,6 +152,8 @@ def main():
         "recovered": results["recovered"],
         "recovery_steps": recovery_steps,
         "recovery_fraction": recovery_fraction,
+        "best_lr": best_lr,
+        "lr_results": lr_results,
         "final_test_acc": results["best_acc"],
         "final_test_loss": results["best_loss"],
         "baseline_test_acc": baseline_acc,
@@ -153,9 +165,9 @@ def main():
     with open(os.path.join(run_dir, "summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 
-    tb.close()
     status = "RECOVERED" if results["recovered"] else "DNR"
-    print(f"[retrain] DONE {status} {json.dumps(summary, indent=2)}", flush=True)
+    print(f"[retrain] DONE {status} best_lr={best_lr} "
+          f"recovery_fraction={recovery_fraction:.4f}", flush=True)
 
 
 if __name__ == "__main__":

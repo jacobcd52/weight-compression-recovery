@@ -91,7 +91,7 @@ background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1
 
 
 def build_html(df, fig_uri, complete, fig_uri_amortized=None, n_expected=29,
-               fig_uri_baseline=None, fig_uri_retrain=None):
+               fig_uri_baseline=None, fig_uri_retrain=None, fig_uri_diag=None):
     now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     baseline = df["baseline_test_acc"].iloc[0]
     baseline_loss = df["baseline_test_loss"].iloc[0] if "baseline_test_loss" in df else float("nan")
@@ -166,6 +166,15 @@ if fig_uri_amortized else '<p class="sub">amortized figure pending.</p>'}
 dropping the size-independent codebook and scale overhead that dominates on a tiny 270k-param
 model. This is the ratio the vector-quantization methods would approach at large model size.</p></div>
 
+<h2>Recovery dynamics vs. LR / schedule (diagnostic)</h2>
+<div class="card">{('<img alt="LR diagnostic" src="'+fig_uri_diag+'">')
+if fig_uri_diag else '<p class="sub">LR diagnostic figure pending.</p>'}
+<p class="sub">Why the headline recovery cost (~7%) is partly an LR artifact: the near-lossless
+init (quantize_8, left) recovers in <b>~0.2%</b> at a gentle constant LR (3e-5) but ~6.7% under
+the high-LR cosine — a ~33x inflation. The harder init (kmeans_2, right) instead needs the cosine
+anneal-to-zero to dip below baseline. So recovery cost should be measured as the minimum over a
+small LR/schedule grid.</p></div>
+
 <h2>Retraining loss curves</h2>
 <div class="card">{('<img alt="Retraining curves" src="'+fig_uri_retrain+'">')
 if fig_uri_retrain else '<p class="sub">retraining curves pending.</p>'}
@@ -202,10 +211,11 @@ def main():
     fig_uri_amortized = _img_data_uri("figures/pareto_amortized.png")
     fig_uri_baseline = _img_data_uri("figures/baseline_curve.png")
     fig_uri_retrain = _img_data_uri("figures/retrain_curves.png")
+    fig_uri_diag = _img_data_uri("figures/diag_lr_curves.png")
     n_expected = 29
     complete = len(df) >= n_expected
     htmltext = build_html(df, fig_uri, complete, fig_uri_amortized, n_expected,
-                          fig_uri_baseline, fig_uri_retrain)
+                          fig_uri_baseline, fig_uri_retrain, fig_uri_diag)
     with open("docs/index.html", "w") as f:
         f.write(htmltext)
     print(f"wrote docs/index.html ({len(df)} runs, complete={complete}, "
