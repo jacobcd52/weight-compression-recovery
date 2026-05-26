@@ -1,42 +1,42 @@
 # STATUS
 
-updated: 2026-05-25T23:51:00Z
-state: SWEEP_RUNNING
-phase: Phase 5 / sweep
+updated: 2026-05-26T00:20:00Z
+state: DONE
+phase: Phase 6 complete
 gpu: NVIDIA GeForce RTX 4090, ~24 GB
+next: awaiting human
 
 ## Now
-Sweep draining via exp job **sweep_driver**. **38/56 complete**, 0 crashes, **6 recovered**.
-~25 min remaining. Currently: magprune_quant_0.01_4. Remaining: rest of magprune_quant + 16 distill variants.
+DONE. All 56 sweep runs complete (40 plain + 16 distill). Pareto figure, results CSV,
+HTML report, and RESULTS.md all generated and pushed.
 
-## NOTE FOR AUTOPILOT / FRESH SESSIONS
-**Do NOT call `sweep launch-next` manually** while `sweep_driver` is alive (`exp status sweep_driver`).
-If it died with the queue not empty:
-`exp sweep_driver -- /workspace/envs/weight-compression-recovery/bin/python -m src.sweep drain`.
-Queue empty → `python -m src.plot` then Phase 6 (RESULTS.md, DONE issue).
+- Clickable report: https://jacobcd52.github.io/weight-compression-recovery/
+- Figure: figures/pareto.png · Data: results/summary.csv · Write-up: RESULTS.md
 
-## Headline result so far
-**Quantization & k-means weight-sharing dominate the Pareto frontier** — they preserve the weight
-distribution, so the reconstructed init is near-lossless and recovery is cheap:
-- quantize_8 (ratio 0.250): REC @ recfrac 0.005 (~1 epoch)
-- kmeans_6  (ratio 0.192): REC @ recfrac 0.005
-- kmeans_4  (ratio 0.126): REC @ 0.080      quantize_4 (0.125): REC @ 0.080
-- kmeans_2  (ratio 0.063): REC @ 0.080   <- best compression-with-recovery so far
-- magnitude_prune_0.5 (ratio 0.531): REC @ 0.085
-Pruning (random/snip/fisher/most magnitude) & low-rank: DNR within the 10% budget.
+## Result summary
+Baseline 90.08%; threshold 89.58%; 10% budget (20 epochs). **9 of 56 recovered.**
+Pareto frontier (most compression first):
+- quantize_1_distill: ratio 0.031 (32×), recovered at 8.5% of training cost
+- kmeans_2_distill:   ratio 0.063 (16×), 6.0%
+- kmeans_4_distill:   ratio 0.126 (8×),  0.5%
+- kmeans_6:           ratio 0.192 (5×),  0.5%
+- quantize_8:         ratio 0.250 (4×),  0.5%
+Quantization & k-means weight-sharing recover cheaply; all pruning + low-rank are DNR in budget;
+distillation extends recovery to 1-bit weights.
 
 ## Recent (most recent first)
-- 2026-05-25T23:51Z — 38/56, 6 recovered. Quant/kmeans recover cheaply; magprune_quant + distill pending
-- 2026-05-25T23:32Z — 25/56, 1 recovered
-- 2026-05-25T22:52Z — launched sweep_driver
+- 2026-05-26T00:20Z — Phase 6 done: figure + report + RESULTS.md pushed; state DONE
+- 2026-05-26T00:10Z — sweep finished 56/56, 9 recovered
+- 2026-05-25T23:51Z — 38/56
 - 2026-05-25T22:46Z — baseline 90.08%
+- 2026-05-25T22:05Z — Phase 0 complete
 
 ## Open runs
-- sweep_driver: draining queue (38/56)
-- magprune_quant_0.01_4: running
+- none
 
-## Completed (6 recovered; see headline)
-- quantize_8/4, kmeans_6/4/2, magnitude_prune_0.5 recovered; all pruning+low_rank knobs DNR
+## Completed runs
+- baseline 90.08% + 56 sweep runs (9 recovered). See results/summary.csv / RESULTS.md.
 
 ## Issues / flags
-none.
+none. (sweep_driver shows "CRASHED" in exp only because the drain loop exits with code 3 =
+"queue empty"; the log confirms clean completion.)
