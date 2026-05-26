@@ -82,14 +82,19 @@ def main():
     steps_per_epoch = len(train_loader)
 
     # Budget + threshold from the *real* baseline metrics.
+    # Recovery metric is TEST LOSS: recover when full-test CE < baseline test loss.
     baseline_steps = base["baseline_steps"]
     baseline_acc = base["baseline_test_acc"]
+    baseline_loss = base["baseline_test_loss"]
     budget_steps = max(steps_per_epoch,
                        int(math.ceil(cfg["budget_fraction"] * baseline_steps)))
     if args.smoke:
         budget_steps = 2 * steps_per_epoch
-    threshold = baseline_acc - cfg["recovery_margin_pp"]
-    warmup_steps = cfg["warmup_epochs"] * steps_per_epoch
+    loss_threshold = baseline_loss + cfg.get("recovery_loss_margin", 0.0)
+    # Short warmup for the short recovery budget (configurable; default ~100 steps).
+    warmup_steps = cfg.get("warmup_steps")
+    if warmup_steps is None:
+        warmup_steps = cfg["warmup_epochs"] * steps_per_epoch
 
     optimizer = build_optimizer(model, cfg)
     scheduler = build_scheduler(optimizer, budget_steps, warmup_steps)
@@ -100,21 +105,22 @@ def main():
 
     tb = SummaryWriter(log_dir=os.path.join(run_dir, "tb"))
     csv_logger = CSVLogger(os.path.join(run_dir, "metrics.csv"),
-                           ["epoch", "step", "test_acc", "lr"])
+                           ["epoch", "step", "test_acc", "test_loss", "lr"])
 
-    # init accuracy before any retraining (informative)
+    # init metrics before any retraining (informative)
     from .utils import eval_full
-    init_acc = eval_full(model, test_loader, device)
+    init_acc, init_loss = eval_full(model, test_loader, device)
 
     print(f"[retrain] run={run_name} tech={technique} knob={knob} mode={args.mode} "
-          f"ratio={compression_ratio:.4f} init_acc={init_acc:.2f} "
-          f"baseline_acc={baseline_acc:.2f} threshold={threshold:.2f} "
-          f"budget_steps={budget_steps} (of {baseline_steps})", flush=True)
+          f"ratio={compression_ratio:.4f} init_acc={init_acc:.2f} init_loss={init_loss:.4f} "
+          f"baseline_loss={baseline_loss:.4f} loss_threshold={loss_threshold:.4f} "
+          f"warmup={warmup_steps} budget_steps={budget_steps} (of {baseline_steps})",
+          flush=True)
 
     results = train_loop(
         model, train_loader, test_loader, device,
         optimizer=optimizer, scheduler=scheduler, total_steps=budget_steps,
-        tb_writer=tb, csv_logger=csv_logger, threshold=threshold,
+        tb_writer=tb, csv_logger=csv_logger, loss_threshold=loss_threshold,
         teacher=teacher, T=cfg["distill_T"], alpha=cfg["distill_alpha"],
         eval_every_steps=cfg.get("eval_every_steps"))
 
@@ -132,11 +138,14 @@ def main():
         "compressed_bytes": compressed_bytes,
         "compression_ratio": compression_ratio,
         "init_acc": init_acc,
+        "init_loss": init_loss,
         "recovered": results["recovered"],
         "recovery_steps": recovery_steps,
         "recovery_fraction": recovery_fraction,
         "final_test_acc": results["best_acc"],
+        "final_test_loss": results["best_loss"],
         "baseline_test_acc": baseline_acc,
+        "baseline_test_loss": baseline_loss,
         "baseline_steps": baseline_steps,
         "budget_steps": budget_steps,
         "smoke": args.smoke,

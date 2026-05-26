@@ -29,10 +29,12 @@ def get_device():
 
 @torch.no_grad()
 def eval_full(model, test_loader, device, use_bf16=True):
-    """Top-1 accuracy (percent) on the full test split."""
+    """Returns (top-1 accuracy %, mean cross-entropy loss) on the full test split."""
+    import torch.nn.functional as F
     model.eval()
     correct = 0
     total = 0
+    loss_sum = 0.0
     for x, y in test_loader:
         x = x.to(device, non_blocking=True)
         y = y.to(device, non_blocking=True)
@@ -41,10 +43,12 @@ def eval_full(model, test_loader, device, use_bf16=True):
                 logits = model(x)
         else:
             logits = model(x)
+        logits = logits.float()
         pred = logits.argmax(dim=1)
         correct += (pred == y).sum().item()
+        loss_sum += F.cross_entropy(logits, y, reduction="sum").item()
         total += y.numel()
-    return 100.0 * correct / total
+    return 100.0 * correct / total, loss_sum / total
 
 
 def count_steps_per_epoch(loader):

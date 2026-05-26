@@ -51,13 +51,13 @@ def main():
 
     tb = SummaryWriter(log_dir=os.path.join(run_dir, "tb"))
     csv_logger = CSVLogger(os.path.join(run_dir, "metrics.csv"),
-                           ["epoch", "step", "test_acc", "lr"])
+                           ["epoch", "step", "test_acc", "test_loss", "lr"])
 
     best_path = os.path.join(run_dir, "best.pt")
 
-    def on_best(m, epoch, step, acc):
-        torch.save({"state_dict": m.state_dict(), "epoch": epoch,
-                    "step": step, "test_acc": acc}, best_path)
+    def on_best(m, epoch, step, acc, loss):  # best = lowest test loss
+        torch.save({"state_dict": m.state_dict(), "epoch": epoch, "step": step,
+                    "test_acc": acc, "test_loss": loss}, best_path)
 
     print(f"[train] run={run_name} device={device} epochs={epochs} "
           f"steps/epoch={steps_per_epoch} total_steps={total_steps} params={params:,}",
@@ -69,7 +69,8 @@ def main():
         tb_writer=tb, csv_logger=csv_logger, on_best=on_best)
 
     torch.save({"state_dict": model.state_dict(), "epoch": epochs - 1,
-                "step": results["steps_taken"], "test_acc": results["final_acc"]},
+                "step": results["steps_taken"], "test_acc": results["final_acc"],
+                "test_loss": results["final_loss"]},
                os.path.join(run_dir, "final.pt"))
 
     # Byte accounting reference for the compression ratio denominator.
@@ -81,6 +82,8 @@ def main():
         "run_name": run_name,
         "baseline_test_acc": results["best_acc"],
         "baseline_final_acc": results["final_acc"],
+        "baseline_test_loss": results["best_loss"],     # recovery target (recover below this)
+        "baseline_final_loss": results["final_loss"],
         "baseline_steps": total_steps,
         "baseline_epochs": epochs,
         "steps_per_epoch": steps_per_epoch,

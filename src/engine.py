@@ -49,14 +49,14 @@ def distill_loss(student_logits, teacher_logits, labels, T=4.0, alpha=0.9):
 
 def train_loop(model, train_loader, test_loader, device, *,
                optimizer, scheduler, total_steps, tb_writer, csv_logger,
-               threshold=None, teacher=None, T=4.0, alpha=0.9,
+               loss_threshold=None, teacher=None, T=4.0, alpha=0.9,
                use_bf16=True, log_prefix="", on_best=None, eval_every_steps=None):
     """Run training until `total_steps` optimizer steps are taken, evaluating the
     full test split every `eval_every_steps` steps (default: once per epoch).
 
-    A finer cadence resolves the recovery step in the low-budget region (e.g.
-    eval_every_steps=78 ≈ 0.1% of baseline steps). If `threshold` is set, stop as
-    soon as test accuracy >= threshold and record the step (recovery).
+    Recovery metric is TEST LOSS: if `loss_threshold` is set, stop as soon as the
+    full-test cross-entropy <= loss_threshold and record the step (recovery).
+    The on_best checkpoint is taken at the lowest test loss seen.
     """
     ce_loss = nn.CrossEntropyLoss()
     steps_per_epoch = len(train_loader)
@@ -66,36 +66,42 @@ def train_loop(model, train_loader, test_loader, device, *,
 
     step = 0
     best_acc = 0.0
+    best_loss = float("inf")
     recovery_steps = None
-    history = []          # list of (step, test_acc)
+    history = []          # list of (step, test_acc, test_loss)
     last_eval_step = -1
 
     if teacher is not None:
         teacher.eval()
 
     def evaluate(final=False):
-        nonlocal best_acc, recovery_steps, last_eval_step
+        nonlocal best_acc, best_loss, recovery_steps, last_eval_step
         if step == last_eval_step:
             return False
         last_eval_step = step
-        test_acc = eval_full(model, test_loader, device, use_bf16=use_bf16)
-        history.append((step, test_acc))
+        test_acc, test_loss = eval_full(model, test_loader, device, use_bf16=use_bf16)
+        history.append((step, test_acc, test_loss))
         if tb_writer is not None:
             tb_writer.add_scalar(f"{log_prefix}test_acc", test_acc, step)
+            tb_writer.add_scalar(f"{log_prefix}test_loss", test_loss, step)
         if csv_logger is not None:
             csv_logger.log(epoch=step // steps_per_epoch, step=step,
-                           test_acc=test_acc, lr=scheduler.get_last_lr()[0])
+                           test_acc=test_acc, test_loss=test_loss,
+                           lr=scheduler.get_last_lr()[0])
         if test_acc > best_acc:
             best_acc = test_acc
+        if test_loss < best_loss:
+            best_loss = test_loss
             if on_best is not None:
-                on_best(model, step // steps_per_epoch, step, test_acc)
+                on_best(model, step // steps_per_epoch, step, test_acc, test_loss)
         print(f"[{log_prefix or 'train'}] step {step}/{total_steps} "
               f"({100*step/total_steps:.1f}% budget) test_acc {test_acc:.2f} "
-              f"best {best_acc:.2f}", flush=True)
-        if threshold is not None and test_acc >= threshold and recovery_steps is None:
+              f"test_loss {test_loss:.4f} best_loss {best_loss:.4f}", flush=True)
+        if (loss_threshold is not None and test_loss <= loss_threshold
+                and recovery_steps is None):
             recovery_steps = step
             print(f"[{log_prefix or 'train'}] RECOVERED at step {step} "
-                  f"(acc {test_acc:.2f} >= {threshold:.2f})", flush=True)
+                  f"(test_loss {test_loss:.4f} <= {loss_threshold:.4f})", flush=True)
             return True
         return False
 
@@ -143,7 +149,9 @@ def train_loop(model, train_loader, test_loader, device, *,
 
     return {
         "best_acc": best_acc,
+        "best_loss": best_loss,
         "final_acc": history[-1][1] if history else 0.0,
+        "final_loss": history[-1][2] if history else float("inf"),
         "steps_taken": step,
         "recovery_steps": recovery_steps,
         "recovered": recovery_steps is not None,
