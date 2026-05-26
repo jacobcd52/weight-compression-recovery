@@ -1,0 +1,19 @@
+# Retraining config for the test-loss / undertrained-baseline regime.
+# Recovery = full-test CE strictly below the baseline's test loss.
+seed: 42
+
+lr: 0.001
+weight_decay: 0.0005
+betas: [0.9, 0.999]
+batch_size: 128
+num_workers: 8
+
+budget_fraction: 0.10        # cap = 10% of (undertrained) baseline steps
+recovery_loss_margin: 0.0    # recover when test_loss <= baseline_test_loss + margin (strict)
+warmup_steps: 100            # short warmup for the short recovery budget (was 5 epochs)
+eval_every_steps: 20         # ~0.1% of the 50-epoch baseline -> resolves fast recoveries
+
+# distillation params (unused unless --mode distill; kept for compatibility)
+distill_T: 4.0
+distill_alpha: 0.9
+warmup_epochs: 5

@@ -87,8 +87,8 @@ def prepare(args):
     per_tech = {}   # tech -> list of (knobstr, ratio, path, knob)
     index_rows = []
     for tech, knob, ks in enumerate_runs(sweep_cfg):
-        # move model+loader to device only when needed (snip/fisher)
-        need_dev = tech in ("snip", "fisher_prune")
+        # move model+loader to device only when needed (snip/fisher/aqlm calibration)
+        need_dev = tech in ("snip", "fisher_prune", "aqlm")
         dev = device if need_dev else torch.device("cpu")
         blob = build_one(sd, tech, knob, train_loader if need_dev else None,
                          dev, seed)

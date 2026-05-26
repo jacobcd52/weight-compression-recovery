@@ -1,0 +1,12 @@
+# Promising-methods sweep (test-loss recovery regime).
+# Dropped the consistently-DNR families (random_sparse, snip, fisher_prune, low_rank).
+# Includes the full AQLM reproduction + simplified additive_vq for comparison.
+distill_extras_per_technique: 0
+
+techniques:
+  - {technique: quantize,        knobs: [8, 4, 2, 1]}
+  - {technique: kmeans,          knobs: [6, 4, 2]}
+  - {technique: magnitude_prune, knobs: [0.5, 0.25, 0.1, 0.05, 0.01, 0.001]}
+  - {technique: magprune_quant,  knob_pairs: [[0.1, 8], [0.1, 4], [0.1, 2], [0.01, 8], [0.01, 4], [0.01, 2]]}
+  - {technique: additive_vq,     knob_pairs: [[4, 8, 8], [2, 8, 8], [1, 8, 8], [1, 4, 8], [1, 2, 8]]}
+  - {technique: aqlm,            knob_pairs: [[2, 8, 8], [4, 4, 8], [2, 4, 8], [1, 4, 8], [1, 2, 8]]}

@@ -25,6 +25,9 @@ def load_summaries(runs_dir="runs"):
         name = os.path.basename(os.path.dirname(path))
         if name in EXCLUDE or "technique" not in s or s.get("smoke"):
             continue
+        # only the current regime: recovery measured by TEST LOSS (has final_test_loss)
+        if "final_test_loss" not in s:
+            continue
         s["run_name"] = name
         rows.append(s)
     # Prefer fine-cadence re-runs: if "<x>_fine" exists, drop the coarse "<x>".
