@@ -31,6 +31,7 @@ TECHNIQUES = {
     "quantize": "uniform per-tensor symmetric scalar quantization",
     "kmeans": "per-tensor k-means weight sharing",
     "magprune_quant": "magnitude-prune then quantize the kept values",
+    "additive_vq": "AQLM-style additive multi-codebook VQ with shared global codebooks",
 }
 
 
@@ -279,6 +280,147 @@ def _magprune_quant_reconstruct(pl, shape):
 
 
 # --------------------------------------------------------------------------- #
+# additive / multi-codebook vector quantization (AQLM-style)
+# --------------------------------------------------------------------------- #
+# Each weight tensor is per-tensor scale-normalized and split into groups of `d`
+# consecutive weights. Every group is represented as a SUM of M codewords, one
+# drawn from each of M codebooks of 2**b entries (dim d). Codebooks are LEARNED
+# GLOBALLY (shared across all compressed tensors) so their byte cost is amortized
+# once over the whole network — this is what makes very high compression possible
+# on a tiny model. Codes are found by greedy residual encoding; codebooks are
+# refined by alternating least squares (a tractable stand-in for AQLM's beam
+# search + codebook update). Reference: Egiazarian et al., "Extreme Compression
+# of LLMs via Additive Quantization" (AQLM), arXiv 2401.06118.
+
+def _greedy_encode(groups, codebooks):
+    """Greedy residual encoding: pick one codeword per codebook to sum toward each group.
+    groups (G, d); codebooks list of M arrays (K, d). Returns codes (G, M) int."""
+    G = groups.shape[0]
+    M = len(codebooks)
+    residual = groups.astype(np.float32).copy()
+    codes = np.zeros((G, M), dtype=np.int64)
+    for m in range(M):
+        cb = codebooks[m]                                  # (K, d)
+        # squared distance from residual to each codeword
+        # ||r||^2 - 2 r.c + ||c||^2 ; drop ||r||^2 (constant per row)
+        d2 = (-2.0 * residual @ cb.T) + (cb * cb).sum(1)[None, :]
+        a = d2.argmin(1)
+        codes[:, m] = a
+        residual = residual - cb[a]
+    return codes
+
+
+def _ls_update_codebooks(groups, codes, M, K, d):
+    """Least-squares update of all codebooks given fixed assignments.
+    Solves min_C || groups - sum_m C_m[codes_m] ||^2 via normal equations on the
+    one-hot design (G, M*K)."""
+    G = groups.shape[0]
+    # Build A^T A (M*K, M*K) and A^T X (M*K, d) without materializing A densely.
+    MK = M * K
+    AtA = np.zeros((MK, MK), dtype=np.float64)
+    AtX = np.zeros((MK, d), dtype=np.float64)
+    # column index of group g in codebook m is m*K + codes[g,m]
+    cols = codes + (np.arange(M) * K)[None, :]             # (G, M)
+    for g in range(0, G, 8192):                            # chunk to bound memory
+        cg = cols[g:g + 8192]                              # (n, M)
+        xg = groups[g:g + 8192]                            # (n, d)
+        n = cg.shape[0]
+        for i in range(M):
+            ci = cg[:, i]
+            np.add.at(AtX, ci, xg)
+            for j in range(M):
+                cj = cg[:, j]
+                # accumulate counts of (ci, cj) co-occurrence
+                np.add.at(AtA, (ci, cj), 1.0)
+    AtA += 1e-6 * np.eye(MK)
+    B = np.linalg.solve(AtA, AtX)                          # (M*K, d)
+    return [B[m * K:(m + 1) * K].astype(np.float32) for m in range(M)]
+
+
+def _additive_vq_compress(state_dict, ckeys, original_shapes, passthrough,
+                          M, b, d, seed, knob, refine_iters=2):
+    K = 1 << b
+    rng = np.random.RandomState(seed)
+
+    # normalize each tensor, split into groups of d (zero-pad tail)
+    per_key = {}
+    chunks = []
+    for k in ckeys:
+        w = state_dict[k].detach().float().cpu().reshape(-1).numpy()
+        scale = float(w.std()) or 1.0
+        wn = w / scale
+        n = wn.size
+        n_groups = int(math.ceil(n / d))
+        pad = n_groups * d - n
+        if pad:
+            wn = np.concatenate([wn, np.zeros(pad, np.float32)])
+        g = wn.reshape(n_groups, d).astype(np.float32)
+        per_key[k] = {"scale": scale, "n": int(n), "pad": int(pad),
+                      "n_groups": int(n_groups)}
+        chunks.append(g)
+    X = np.vstack(chunks)                                  # (G_total, d)
+
+    # init codebooks by residual k-means (RVQ)
+    from sklearn.cluster import MiniBatchKMeans
+    codebooks = []
+    residual = X.copy()
+    for m in range(M):
+        nk = min(K, residual.shape[0])
+        km = MiniBatchKMeans(n_clusters=nk, random_state=seed + m, n_init=3,
+                             batch_size=max(256, nk * 4))
+        km.fit(residual)
+        cb = np.zeros((K, d), np.float32)
+        cb[:nk] = km.cluster_centers_.astype(np.float32)
+        codebooks.append(cb)
+        a = km.predict(residual)
+        residual = residual - cb[a]
+
+    # refine: alternate (encode, least-squares codebook update)
+    codes = _greedy_encode(X, codebooks)
+    for _ in range(refine_iters):
+        codebooks = _ls_update_codebooks(X, codes, M, K, d)
+        codes = _greedy_encode(X, codebooks)
+
+    # split codes back per key
+    compressed = {}
+    off = 0
+    for k in ckeys:
+        ng = per_key[k]["n_groups"]
+        c = codes[off:off + ng].astype(np.int32)
+        off += ng
+        compressed[k] = {"kind": "additive_vq", "codes": c,
+                         "scale": per_key[k]["scale"], "n": per_key[k]["n"],
+                         "pad": per_key[k]["pad"]}
+
+    # honest byte accounting
+    code_bits = int(codes.shape[0]) * M * b              # total code bits
+    codebook_bytes = M * K * d * 2                       # fp16 codebooks, counted ONCE
+    scale_bytes = len(ckeys) * 4                         # one fp32 scale per tensor
+    total = int(math.ceil(code_bits / 8) + codebook_bytes + scale_bytes)
+
+    cb_fp16 = [cb.astype(np.float16) for cb in codebooks]
+    return {
+        "technique": "additive_vq",
+        "knob": list(knob),
+        "payload": {"compressed": compressed, "passthrough": passthrough,
+                    "shared": {"codebooks": cb_fp16, "M": M, "b": b, "d": d}},
+        "bytes": total,
+        "dense_keys": ckeys,
+        "original_shapes": original_shapes,
+    }
+
+
+def _additive_vq_reconstruct(pl, shape, codebooks):
+    d = codebooks[0].shape[1]
+    codes = pl["codes"].astype(np.int64)                  # (n_groups, M)
+    recon = np.zeros((codes.shape[0], d), np.float32)
+    for m, cb in enumerate(codebooks):
+        recon += cb.astype(np.float32)[codes[:, m]]
+    flat = recon.reshape(-1)[: pl["n"]] * np.float32(pl["scale"])
+    return torch.from_numpy(flat.reshape(shape)).float()
+
+
+# --------------------------------------------------------------------------- #
 # top-level dispatch
 # --------------------------------------------------------------------------- #
 
@@ -300,6 +442,11 @@ def compress(state_dict, technique, knob, *, train_loader=None, device=None,
     original_shapes = {k: tuple(state_dict[k].shape) for k in ckeys}
     passthrough = {k: v.detach().cpu().clone()
                    for k, v in state_dict.items() if k not in ckeys}
+
+    if technique == "additive_vq":
+        M, b, d = (int(x) for x in knob)
+        return _additive_vq_compress(state_dict, ckeys, original_shapes,
+                                     passthrough, M, b, d, seed, knob)
 
     scores = None
     if technique == "snip":
@@ -350,8 +497,12 @@ def reconstruct(compressed):
     sd = {}
     for k, v in payload["passthrough"].items():
         sd[k] = v.detach().cpu().clone().float() if v.is_floating_point() else v.clone()
+    shared = payload.get("shared")
     for k, pl in payload["compressed"].items():
-        sd[k] = _RECONSTRUCT[pl["kind"]](pl, shapes[k])
+        if pl["kind"] == "additive_vq":
+            sd[k] = _additive_vq_reconstruct(pl, shapes[k], shared["codebooks"])
+        else:
+            sd[k] = _RECONSTRUCT[pl["kind"]](pl, shapes[k])
     return sd
 
 
@@ -397,6 +548,7 @@ if __name__ == "__main__":
         ("quantize", 8, 0.2),
         ("kmeans", 6, 0.5),
         ("magprune_quant", (0.1, 4), None),
+        ("additive_vq", [2, 8, 8], 0.8),  # 2 codebooks x 256 over dim-8 groups
     ]
 
     all_ok = True

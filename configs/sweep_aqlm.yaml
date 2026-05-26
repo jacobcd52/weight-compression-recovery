@@ -1,0 +1,16 @@
+# AQLM-style additive multi-codebook VQ sweep.
+# knob = [M, b, d]: M codebooks of 2^b codewords over groups of d weights.
+# Effective code rate = M*b/d bits/weight (+ a shared global codebook, amortized once).
+# Spans ~4 bits/wt (mild) down to 0.25 bits/wt (extreme, ~100x). Plain-CE recovery only.
+distill_extras_per_technique: 0
+
+techniques:
+  - technique: additive_vq
+    knob_pairs:
+      - [4, 8, 8]   # 4.00 bits/wt
+      - [3, 8, 8]   # 3.00
+      - [2, 8, 8]   # 2.00
+      - [2, 4, 8]   # 1.00
+      - [1, 8, 8]   # 1.00
+      - [1, 4, 8]   # 0.50
+      - [1, 2, 8]   # 0.25  (~100x)

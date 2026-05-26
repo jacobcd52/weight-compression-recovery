@@ -115,7 +115,8 @@ def main():
         model, train_loader, test_loader, device,
         optimizer=optimizer, scheduler=scheduler, total_steps=budget_steps,
         tb_writer=tb, csv_logger=csv_logger, threshold=threshold,
-        teacher=teacher, T=cfg["distill_T"], alpha=cfg["distill_alpha"])
+        teacher=teacher, T=cfg["distill_T"], alpha=cfg["distill_alpha"],
+        eval_every_steps=cfg.get("eval_every_steps"))
 
     recovery_steps = results["recovery_steps"]
     recovery_fraction = (recovery_steps / baseline_steps

@@ -253,7 +253,15 @@ def main():
     ap.add_argument("--config", default="configs/baseline.yaml")
     ap.add_argument("--sweep", default="configs/sweep.yaml")
     ap.add_argument("--baseline-dir", default="runs/baseline")
+    ap.add_argument("--tag", default="",
+                    help="suffix for queue/index/attempts files so multiple sweeps coexist")
     args = ap.parse_args()
+
+    if args.tag:
+        global QUEUE_PATH, INDEX_PATH, ATTEMPTS_PATH
+        QUEUE_PATH = f"runs/queue_{args.tag}.txt"
+        INDEX_PATH = f"runs/index_{args.tag}.csv"
+        ATTEMPTS_PATH = f"runs/attempts_{args.tag}.json"
 
     if args.command == "prepare":
         prepare(args)

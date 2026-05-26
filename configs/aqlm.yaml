@@ -1,0 +1,20 @@
+# Retraining config for the AQLM / high-compression sweep.
+# Identical optimizer/schedule to baseline, but with a FINE eval cadence so the
+# recovery step is resolved in the low-budget (0.1%-1%) region the user cares about.
+run_name: baseline           # only used by train.py; retrain uses --baseline-dir
+seed: 42
+
+lr: 0.001
+weight_decay: 0.0005
+betas: [0.9, 0.999]
+epochs: 200
+warmup_epochs: 5
+batch_size: 128
+num_workers: 8
+
+recovery_margin_pp: 0.5
+budget_fraction: 0.10        # keep the 10% ceiling; fine cadence covers the 0.1-1% region
+eval_every_steps: 78         # ~0.1% of baseline (78200) steps -> resolves low-budget recoveries
+
+distill_T: 4.0
+distill_alpha: 0.9
