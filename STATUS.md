@@ -1,42 +1,36 @@
 # STATUS
 
-updated: 2026-05-26T00:20:00Z
-state: DONE
-phase: Phase 6 complete
+updated: 2026-05-26T01:05:00Z
+state: SWEEP_RUNNING
+phase: AQLM high-compression sweep (reproducing "Aggressive Compression Enables LLM Weight Theft")
 gpu: NVIDIA GeForce RTX 4090, ~24 GB
-next: awaiting human
+next: sweep running (~15-20 min)
 
 ## Now
-DONE. All 56 sweep runs complete (40 plain + 16 distill). Pareto figure, results CSV,
-HTML report, and RESULTS.md all generated and pushed.
+New direction: reproduce the paper's headline method — **additive multi-codebook VQ (AQLM-style)** —
+on ResNet-20, and sweep the FULL compression-ratio vs recovery-compute curve with fine resolution
+in the 0.1-1% budget region (kept the 10% cap too). exp job **sweep_driver_aqlm** is draining a
+7-knob queue (additive_vq, 7x-126x compression), plain-CE recovery, eval every 78 steps (~0.1%).
 
-- Clickable report: https://jacobcd52.github.io/weight-compression-recovery/
-- Figure: figures/pareto.png · Data: results/summary.csv · Write-up: RESULTS.md
+Built reps + init accuracy: 7x→init 86%, 14x→28%, 28x/63x/126x→~random. The sweep measures how
+much retraining compute each needs to recover (threshold 89.58%).
 
-## Result summary
-Baseline 90.08%; threshold 89.58%; 10% budget (20 epochs). **9 of 56 recovered.**
-Pareto frontier (most compression first):
-- quantize_1_distill: ratio 0.031 (32×), recovered at 8.5% of training cost
-- kmeans_2_distill:   ratio 0.063 (16×), 6.0%
-- kmeans_4_distill:   ratio 0.126 (8×),  0.5%
-- kmeans_6:           ratio 0.192 (5×),  0.5%
-- quantize_8:         ratio 0.250 (4×),  0.5%
-Quantization & k-means weight-sharing recover cheaply; all pruning + low-rank are DNR in budget;
-distillation extends recovery to 1-bit weights.
+## NOTE FOR AUTOPILOT / FRESH SESSIONS
+Two sweeps use separate queues via --tag. The AQLM one: driver `sweep_driver_aqlm`, queue
+runs/queue_aqlm.txt. Resume if it dies with queue non-empty:
+`exp sweep_driver_aqlm -- /workspace/envs/weight-compression-recovery/bin/python -m src.sweep drain --config configs/aqlm.yaml --sweep configs/sweep_aqlm.yaml --tag aqlm`
+When done: `python -m src.plot` then `python -m src.report`; both auto-include the new points.
 
 ## Recent (most recent first)
-- 2026-05-26T00:20Z — Phase 6 done: figure + report + RESULTS.md pushed; state DONE
-- 2026-05-26T00:10Z — sweep finished 56/56, 9 recovered
-- 2026-05-25T23:51Z — 38/56
+- 2026-05-26T01:05Z — implemented additive_vq + fine-cadence eval; launched 7-knob AQLM sweep
+- 2026-05-26T00:20Z — Phase 1-6 DONE (8 techniques, 56 runs); report live
 - 2026-05-25T22:46Z — baseline 90.08%
-- 2026-05-25T22:05Z — Phase 0 complete
 
 ## Open runs
-- none
+- sweep_driver_aqlm: draining 7-knob additive_vq queue
 
 ## Completed runs
-- baseline 90.08% + 56 sweep runs (9 recovered). See results/summary.csv / RESULTS.md.
+- prior sweep: 56 runs, 9 recovered (report live at the Pages URL)
 
 ## Issues / flags
-none. (sweep_driver shows "CRASHED" in exp only because the drain loop exits with code 3 =
-"queue empty"; the log confirms clean completion.)
+none
