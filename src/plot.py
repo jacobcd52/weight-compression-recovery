@@ -38,9 +38,12 @@ def load_summaries(runs_dir="runs"):
 
 
 def make_baseline_curve(runs_dir="runs", out_dir="figures"):
-    """Embed-friendly baseline training curve (test loss + test acc vs epoch) from the CSV."""
+    """Embed-friendly baseline training curve (test loss + test acc vs epoch) from the CSV.
+    Prefers the GroupNorm baseline (current canonical) if present."""
     import csv
-    path = os.path.join(runs_dir, "baseline", "metrics.csv")
+    path = os.path.join(runs_dir, "baseline_gn", "metrics.csv")
+    if not os.path.exists(path):
+        path = os.path.join(runs_dir, "baseline", "metrics.csv")
     if not os.path.exists(path):
         return
     ep, acc, loss = [], [], []
