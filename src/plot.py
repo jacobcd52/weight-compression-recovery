@@ -119,8 +119,8 @@ def make_retrain_curves(runs_dir="runs", out_dir="figures", names=None):
     ax.set_xlabel("retraining cost  (% of baseline steps)")
     ax.set_ylabel("full-test loss")
     ax.set_ylim(0.38, 0.85)
-    ax.set_title("Retraining dynamics: test loss vs. compute\n"
-                 "(note the early high-LR bump, then dip below baseline late in the cosine decay)")
+    ax.set_title("Retraining dynamics: test loss vs. compute (best-over-LRs envelope)\n"
+                 "DNR methods plateau just above baseline — recovery is knife-edge at a tuned baseline")
     ax.grid(alpha=.25)
     ax.legend(fontsize=8, ncol=2, loc="upper right")
     fig.tight_layout()
