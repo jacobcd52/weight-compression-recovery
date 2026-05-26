@@ -25,7 +25,12 @@ def load_summaries(runs_dir="runs"):
         name = os.path.basename(os.path.dirname(path))
         if name in EXCLUDE or "technique" not in s or s.get("smoke"):
             continue
+        s["run_name"] = name
         rows.append(s)
+    # Prefer fine-cadence re-runs: if "<x>_fine" exists, drop the coarse "<x>".
+    names = {r["run_name"] for r in rows}
+    superseded = {n[:-5] for n in names if n.endswith("_fine")}
+    rows = [r for r in rows if r["run_name"] not in superseded]
     return pd.DataFrame(rows)
 
 
@@ -81,9 +86,10 @@ def make_plot(df, out_dir="figures", budget=0.10):
     ax.axhline(budget, color="grey", ls="--", lw=1.0, alpha=0.7)
 
     ax.set_xscale("log")
+    ax.set_yscale("log")
     ax.set_xlabel("Compression ratio  (compressed / fp32 bytes; lower = more compressed)")
-    ax.set_ylabel("Recovery fraction  (retrain steps / baseline steps)")
-    ax.set_ylim(0, budget * 1.08)
+    ax.set_ylabel("Recovery cost  (retrain steps / baseline steps, log)")
+    ax.set_ylim(8e-4, budget * 1.35)
     ax.set_title("Weight-compression recovery: compression vs. retraining cost\n"
                  "ResNet-20 / CIFAR-10 (open markers at top = DNR within 10% budget)")
     ax.grid(True, which="both", alpha=0.25)

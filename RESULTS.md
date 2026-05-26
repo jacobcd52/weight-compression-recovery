@@ -3,6 +3,37 @@
 **Clickable report:** https://jacobcd52.github.io/weight-compression-recovery/
 **Figure:** `figures/pareto.png` · **Data:** `results/summary.csv`
 
+## Update (2026-05-26): AQLM reproduction + fine-grained recovery sweep
+
+Reproduced the headline method of *"Aggressive Compression Enables LLM Weight Theft"* —
+**additive multi-codebook vector quantization (AQLM-style)** — on ResNet-20, with shared global
+codebooks (RVQ init + least-squares codebook refinement), and re-ran the recovery axis with a
+**fine eval cadence (every ~0.1% of baseline steps)** to resolve cheap recoveries.
+
+**Findings:**
+- **Additive VQ recovers up to ~14× within the 10% budget** (additive_vq 7×/9×/14× recover at
+  7.5–8.7% cost) but is **DNR at 28×+** — and crucially, on this small model it is *competitive
+  with but not better than* our existing k-means / scalar quantization (kmeans_2 already recovers
+  at 16×). The paper's large AQLM gains are at LLM scale; at 270k params the simpler distribution-
+  preserving methods are just as good.
+- **Recovery cost is bimodal.** The fine cadence shows near-lossless methods (quantize_8 at 4×,
+  kmeans_6 at 5×) recover in **<0.1%** of baseline compute (their reconstructed init is already
+  ~89–90%), while aggressive methods need **~7–9%**. The **0.1–1% region is essentially empty** —
+  recovery is closer to all-or-nothing than a smooth curve. (This is what the original epoch-
+  granularity sweep hid.)
+- **Beyond ~16× compression, plain-CE recovery needs >10% budget.** additive_vq 28×/31× plateau at
+  89.3% (just under the 89.58% bar) even at full budget; only distillation previously reached 32×
+  (quantize_1_distill). Pushing the high-compression frontier further would mean raising the budget
+  cap above 10%, not staying at the paper's ~0.01–1% levels.
+
+**Scaling to 1.5B (e.g. Qwen2.5-1.5B):** recovery-retraining GPU compute dominates and scales as
+6·N·(budget × pretrain_tokens). Rough per-sweep cost on H100: ~$0.5–6k at a ≤0.1% budget cap,
+but ~$56k / ~940 GPU-days at a 1% cap across ~40 runs — recommend tiering (bulk at ≤0.1%, spot-
+check 1% on the few most-compressed knobs). Needs 80 GB GPUs (optimizer states), and the LLM auto-
+search becomes GPU-bound (evals cost hours–days), so it would need a small-model proxy.
+
+---
+
 ## Setup recap
 - ResNet-20 / CIFAR-10. Baseline (200 epochs, AdamW + warmup-cosine, bf16): **90.08%** test acc.
 - Recovery threshold = **89.58%** (baseline − 0.5 pp) on the full 10k test set.
