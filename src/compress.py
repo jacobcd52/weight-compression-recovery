@@ -112,7 +112,7 @@ def _symmetric_dequantize(codes, scale):
 # importance scores (snip / fisher) — need model + data
 # --------------------------------------------------------------------------- #
 
-def _grad_scores(state_dict, ckeys, train_loader, device, n_batches, square):
+def _grad_scores(state_dict, ckeys, train_loader, device, n_batches, square, norm="batch"):
     """Compute per-key importance from gradients on `n_batches` minibatches.
 
     snip:   square=False, n_batches=1 -> |w * grad|
@@ -121,7 +121,7 @@ def _grad_scores(state_dict, ckeys, train_loader, device, n_batches, square):
     from .models import resnet20
     import torch.nn as nn
 
-    model = resnet20().to(device)
+    model = resnet20(norm=norm).to(device)
     model.load_state_dict(state_dict)
     model.eval()  # BN uses running stats; we only want gradients, not BN updates
     ce = nn.CrossEntropyLoss()
@@ -436,14 +436,14 @@ def _additive_vq_reconstruct(pl, shape, codebooks):
 # (Simplifications vs. full AQLM: diagonal — not full — Hessian, and greedy — not
 #  beam-search — code assignment. Documented; see RESULTS.)
 
-def _aqlm_importance(state_dict, ckeys, train_loader, device, n_batches=4):
+def _aqlm_importance(state_dict, ckeys, train_loader, device, n_batches=4, norm="batch"):
     """Per-input-dimension activation energy (diagonal Hessian) for each layer,
     aligned with weight.reshape(out, -1) column order."""
     import torch.nn as nn
     import torch.nn.functional as F
     from .models import resnet20
 
-    model = resnet20().to(device)
+    model = resnet20(norm=norm).to(device)
     model.load_state_dict(state_dict)
     model.eval()
 
@@ -612,7 +612,7 @@ _RECONSTRUCT = {
 
 
 def compress(state_dict, technique, knob, *, train_loader=None, device=None,
-             seed=42, **kwargs):
+             seed=42, norm="batch", **kwargs):
     if technique not in TECHNIQUES:
         raise ValueError(f"unknown technique {technique!r}")
 
@@ -630,12 +630,12 @@ def compress(state_dict, technique, knob, *, train_loader=None, device=None,
     importance = None
     if technique == "snip":
         scores = _grad_scores(state_dict, ckeys, train_loader, device,
-                              n_batches=1, square=False)
+                              n_batches=1, square=False, norm=norm)
     elif technique == "fisher_prune":
         scores = _grad_scores(state_dict, ckeys, train_loader, device,
-                              n_batches=10, square=True)
+                              n_batches=10, square=True, norm=norm)
     elif technique == "aqlm":
-        importance = _aqlm_importance(state_dict, ckeys, train_loader, device)
+        importance = _aqlm_importance(state_dict, ckeys, train_loader, device, norm=norm)
 
     rng = np.random.RandomState(seed)
     compressed = {}

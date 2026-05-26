@@ -1,0 +1,17 @@
+# GroupNorm ResNet-20 baseline (stateless norm -> vmap-clean for the ensemble evaluator).
+# Goes to runs/baseline_gn so it does not clobber the BatchNorm baseline.
+run_name: baseline_gn
+seed: 42
+norm: group
+gn_groups: 8
+
+lr: 0.001
+weight_decay: 0.0005
+betas: [0.9, 0.999]
+epochs: 50
+warmup_epochs: 5
+batch_size: 128
+num_workers: 8
+
+recovery_margin_pp: 0.5
+budget_fraction: 0.10

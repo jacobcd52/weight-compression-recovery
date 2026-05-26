@@ -44,7 +44,8 @@ def main():
     total_steps = epochs * steps_per_epoch
     warmup_steps = warmup_epochs * steps_per_epoch
 
-    model = resnet20(num_classes=10).to(device)
+    model = resnet20(num_classes=10, norm=cfg.get("norm", "batch"),
+                     groups=cfg.get("gn_groups", 8)).to(device)
     params = count_params(model)
     optimizer = build_optimizer(model, cfg)
     scheduler = build_scheduler(optimizer, total_steps, warmup_steps)
@@ -80,6 +81,7 @@ def main():
 
     summary = {
         "run_name": run_name,
+        "norm": cfg.get("norm", "batch"),
         "baseline_test_acc": results["best_acc"],
         "baseline_final_acc": results["final_acc"],
         "baseline_test_loss": results["best_loss"],     # recovery target (recover below this)
