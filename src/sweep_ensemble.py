@@ -28,7 +28,10 @@ def main():
     ap.add_argument("--baseline-dir", default="runs/baseline_gn")
     ap.add_argument("--chunk-models", type=int, default=8,
                     help="models per vmap chunk (x len(lr_grid) configs run together)")
+    ap.add_argument("--only", default=None,
+                    help="comma-separated run names (technique_knob) to run a subset")
     args = ap.parse_args()
+    only = set(args.only.split(",")) if args.only else None
 
     cfg = load_config(args.config)
     sweep_cfg = load_config(args.sweep)
@@ -53,6 +56,8 @@ def main():
     # 1) build compressed reps + reconstructed inits for every (technique, knob)
     models = []   # list of dict(name, technique, knob, ratio, amort_ratio, cbytes, init)
     for tech, knob, ks in enumerate_runs(sweep_cfg):
+        if only is not None and f"{tech}_{ks}" not in only:
+            continue
         need_dev = tech in ("snip", "fisher_prune", "aqlm")
         comp = compress(sd, tech, knob, train_loader=(train_loader if need_dev else None),
                         device=device, seed=seed, norm=norm)
@@ -68,10 +73,12 @@ def main():
     # One method at a time: vmap its K LRs (W=K), stop the moment ANY LR crosses
     # (= the min recovery over LRs). Methods run in series. Fast methods exit in a step
     # or two instead of dragging a wide batch to full budget.
-    per_model_results = {}
+    from .utils import CSVLogger
+    spe = base["steps_per_epoch"]
+    per_model_results, per_model_curves = {}, {}
     for mi, mdl in enumerate(models):
         inits = [mdl["init"]] * K
-        res = run_ensemble(inits, list(lr_grid), baseline_loss=baseline_loss,
+        res, curve = run_ensemble(inits, list(lr_grid), baseline_loss=baseline_loss,
                            baseline_steps=baseline_steps, budget_steps=budget_steps,
                            warmup_steps=warmup_steps, eval_every=eval_every,
                            train_loader=train_loader, test_loader=test_loader,
@@ -79,6 +86,13 @@ def main():
                            weight_decay=cfg["weight_decay"], betas=tuple(cfg["betas"]),
                            stop_on_any=True, log_prefix=f" {mdl['name']}")
         per_model_results[mdl["name"]] = res
+        per_model_curves[mdl["name"]] = curve
+        # record the best-over-LRs loss/acc trajectory so the report can show curves
+        run_dir = os.path.join("runs", mdl["name"]); os.makedirs(run_dir, exist_ok=True)
+        clog = CSVLogger(os.path.join(run_dir, "metrics.csv"),
+                         ["epoch", "step", "test_acc", "test_loss", "lr"])
+        for (st, lo, ac) in curve:
+            clog.log(epoch=st // spe, step=st, test_acc=ac, test_loss=lo, lr=0)
         rec = [r for r in res if r["recovered"]]
         tag = (f"REC@{min(r['recovery_fraction'] for r in rec)*100:.2f}%" if rec else "DNR")
         print(f"[ensemble] {mi+1}/{len(models)} {mdl['name']:<22} ratio={mdl['ratio']:.4f} {tag}",
@@ -108,6 +122,7 @@ def main():
                             "best_loss": r["best_loss"]} for r in rs],
             "final_test_loss": min(r["best_loss"] for r in rs),
             "final_test_acc": 0.0,
+            "init_loss": per_model_curves[mdl["name"]][0][1],
             "baseline_test_loss": baseline_loss, "baseline_test_acc": base["baseline_test_acc"],
             "baseline_steps": baseline_steps, "budget_steps": budget_steps, "smoke": False,
         }
