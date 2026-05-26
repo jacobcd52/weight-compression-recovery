@@ -135,6 +135,9 @@ def attach_amortized(df, compressed_dir="compressed"):
     from .compress import amortized_bytes
     vals = []
     for _, r in df.iterrows():
+        # prefer a value already recorded in the summary (ensemble runs do this)
+        if "amortized_ratio" in r and r["amortized_ratio"] == r["amortized_ratio"]:  # not NaN
+            vals.append(r["amortized_ratio"]); continue
         base = r["run_name"]
         for suf in ("_distill", "_fine", "_smoke"):
             if base.endswith(suf):
