@@ -33,13 +33,20 @@ background:var(--card);border:1px solid var(--line);border-radius:12px;padding:1
 <h1>Weight-compression recovery</h1>
 <p class="sub">Threat model: if an attacker steals a few compressed bytes of a trained model
 and has the training data, how cheaply can they retrain back to full accuracy?<br>
-ResNet-20 / CIFAR-10 (GroupNorm, best-LR baseline) &middot; In progress (17/29 runs) &middot; generated 2026-05-26 23:43 UTC</p>
+ResNet-20 / CIFAR-10 (GroupNorm, best-LR baseline) &middot; In progress (17/29 runs) &middot; generated 2026-05-27 02:48 UTC</p>
 
 <div class="kpi">
   <div class="b"><div class="n">0.510</div><div class="l">target loss (baseline @ epoch 30)</div></div>
   <div class="b"><div class="n">87.0%</div><div class="l">baseline test acc</div></div>
   <div class="b"><div class="n">10/17</div><div class="l">runs recovered</div></div>
   <div class="b"><div class="n">5%</div><div class="l">retrain budget cap</div></div>
+</div>
+
+<div class="card" style="border-color:var(--accent)">
+<b>&#129518; New: auto-research.</b> An LLM evolved its own compression schemes against this same
+recovery metric and beat the hand-tuned baseline — pushing the recovering frontier to
+<b>≈19× compression</b> (ratio 0.053) for ~2% retraining, by rediscovering group-wise NormalFloat
+quantization. <a href="autoresearch.html">See the auto-research report &rarr;</a>
 </div>
 
 <h2>What this measures</h2>

@@ -135,6 +135,13 @@ ResNet-20 / CIFAR-10 (GroupNorm, best-LR baseline) &middot; {status} &middot; ge
   <div class="b"><div class="n">5%</div><div class="l">retrain budget cap</div></div>
 </div>
 
+<div class="card" style="border-color:var(--accent)">
+<b>&#129518; New: auto-research.</b> An LLM evolved its own compression schemes against this same
+recovery metric and beat the hand-tuned baseline — pushing the recovering frontier to
+<b>≈19× compression</b> (ratio 0.053) for ~2% retraining, by rediscovering group-wise NormalFloat
+quantization. <a href="autoresearch.html">See the auto-research report &rarr;</a>
+</div>
+
 <h2>What this measures</h2>
 <div class="card"><ul>
 <li><b>Compression ratio</b> = compressed bytes / fp32 bytes of the conv+linear weights

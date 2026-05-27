@@ -27,3 +27,10 @@ tensorboard/
 .vscode/
 .idea/
 .DS_Store
+
+# Keep the auto-research archive (small, NOT regenerable — it is the LLM-search output)
+!runs/
+runs/*
+!runs/autoresearch/
+runs/autoresearch/*
+!runs/autoresearch/archive.json
