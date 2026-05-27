@@ -157,7 +157,14 @@ def build_html(vic, fr, front):
                 f"<td>{html.escape(str(r.get('best_lr') or ''))}</td></tr>")
         ftable = "".join(rows)
 
-    frontier_section = f"""
+    ar_banner = ('<div class="card" style="border-color:var(--accent)">'
+                 '<b>&#129518; Auto-research:</b> specialized LLM agents (vector-quant on Opus) '
+                 'evolved compression schemes and beat the hand seeds — additive multi-codebook VQ '
+                 'pushed the recoverable ratio below group-NF2. '
+                 '<a href="llm_autoresearch.html">See the LLM auto-research report &rarr;</a></div>'
+                 ) if os.path.exists("docs/llm_autoresearch.html") else ""
+
+    frontier_section = ar_banner + f"""
 <h2>Compression / recovery frontier (hand-written seeds)</h2>
 <div class="card">{('<img alt="frontier" src="'+uri_fr+'">') if uri_fr else
 '<p class="sub">frontier figure pending — the seed sweep is still running.</p>'}
