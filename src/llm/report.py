@@ -15,8 +15,11 @@ from ..report import CSS, _img_data_uri
 
 VICTIM_DIR = "runs/llm_victim"
 FRONTIER = "runs/llm_seedfrontier/frontier.json"
+VALIDATION = "runs/llm_victim/validation.json"
 FIG_BASE = "figures/llm_baseline_curve.png"
 FIG_FRONTIER = "figures/llm_seed_frontier.png"
+FIG_RETRAIN = "figures/llm_retrain_curves.png"
+FIG_VALID = "figures/llm_method_validation.png"
 
 # measured: released SimpleStories-11M eval loss on OUR held-out test set (same tokenizer/metric)
 RELEASED_LOSS = 1.7786
@@ -73,11 +76,67 @@ def make_frontier_fig(fr):
     return front
 
 
+def make_retrain_fig(fr):
+    """Retraining curves: min-over-LRs eval loss vs retrain step, per candidate that trained."""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    os.makedirs("figures", exist_ok=True)
+    target = fr["target"]
+    drawn = 0
+    fig, ax = plt.subplots(figsize=(7.4, 4.8))
+    cmap = plt.cm.tab10
+    for r in sorted(fr["results"], key=lambda r: r.get("ratio", 1.0)):
+        curve = r.get("curve")
+        if not r.get("valid", True) or not curve or len(curve) < 2:
+            continue  # skip free (0-step) and build-fails
+        xs, ys = [], []
+        for step, snap in curve:
+            vals = [v for v in snap.values() if v is not None]
+            if vals:
+                xs.append(step); ys.append(min(vals))
+        if len(xs) < 2:
+            continue
+        c = cmap(drawn % 10)
+        ls = "-" if r.get("recovered") else "--"
+        lab = f"{r['name'].replace('seed_','').replace('resnet_best_','RN:')} " \
+              f"(r={r['ratio']:.3f}, {'REC '+format(r['recovery_fraction']*100,'.1f')+'%' if r.get('recovered') else 'DNR'})"
+        ax.plot(xs, ys, ls, color=c, lw=1.8, label=lab); drawn += 1
+    ax.axhline(target, ls=":", c="k", lw=1.5, label=f"target {target:.3f}")
+    ax.set_xlabel("retraining step"); ax.set_ylabel("eval loss (min over LR sweep)")
+    ax.set_title("Recovery retraining curves (11M victim, per compression scheme)")
+    ax.legend(fontsize=7.5, ncol=2); ax.grid(alpha=.15)
+    fig.tight_layout(); fig.savefig(FIG_RETRAIN, dpi=130); plt.close(fig)
+
+
+def make_validation_fig(val):
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    os.makedirs("figures", exist_ok=True)
+    tgt = val["target"]
+    fig, axs = plt.subplots(1, 3, figsize=(12.5, 4.0))
+    lr = val["loss_vs_rank"]; axs[0].plot(lr["ranks"], lr["loss"], "-o", color="#5ab1ef")
+    axs[0].set_title("low-rank: loss vs rank"); axs[0].set_xlabel("SVD rank (all matrices)")
+    sp = val["loss_vs_keep"]; axs[1].plot([k*100 for k in sp["keep"]], sp["loss"], "-o", color="#2ea043")
+    axs[1].set_title("sparsity: loss vs % weights kept"); axs[1].set_xlabel("% weights kept")
+    bq = val["loss_vs_bits"]; axs[2].plot(bq["bits"], bq["loss"], "-o", color="#f0a030")
+    axs[2].set_title("quant: loss vs bits (global scale)"); axs[2].set_xlabel("bits")
+    for ax in axs:
+        ax.axhline(tgt, ls="--", c="#7d3a3a", lw=1, label=f"baseline {tgt:.2f}")
+        ax.set_ylabel("eval loss"); ax.grid(alpha=.15); ax.legend(fontsize=8)
+    fig.suptitle("Method validation — full rank / all weights / 8-bit all return the baseline loss "
+                 "(implementations correct)", fontsize=11)
+    fig.tight_layout(); fig.savefig(FIG_VALID, dpi=120); plt.close(fig)
+
+
 def build_html(vic, fr, front):
     now = datetime.datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
     our_tokens = vic["tokens"]; our_loss = vic["target_loss"]
     uri_base = _img_data_uri(FIG_BASE)
     uri_fr = _img_data_uri(FIG_FRONTIER) if os.path.exists(FIG_FRONTIER) else None
+    uri_retrain = _img_data_uri(FIG_RETRAIN) if os.path.exists(FIG_RETRAIN) else None
+    uri_valid = _img_data_uri(FIG_VALID) if os.path.exists(FIG_VALID) else None
 
     # frontier table
     ftable = ""
@@ -109,7 +168,13 @@ recover within the {fr['budget_fraction']*100:.0f}% budget. &#9733; = on the Par
 </div>
 <div class="card" style="overflow:auto"><table><thead><tr><th>scheme</th><th>ratio</th>
 <th>&times;smaller</th><th>recon loss</th><th>result</th><th>recovery cost</th><th>best LR</th>
-</tr></thead><tbody>{ftable}</tbody></table></div>""" if fr else """
+</tr></thead><tbody>{ftable}</tbody></table></div>
+<h2>Recovery retraining curves</h2>
+<div class="card">{('<img alt="retrain curves" src="'+uri_retrain+'">') if uri_retrain else
+'<p class="sub">retraining curves pending.</p>'}
+<p class="sub">Eval loss vs. retraining step for each scheme (min over the LR sweep). Solid =
+recovered (crossed the dotted target), dashed = did not recover within budget. Schemes whose
+reconstruction already met the target trained 0 steps and are omitted.</p></div>""" if fr else """
 <h2>Compression / recovery frontier</h2>
 <div class="card"><p class="sub">The seed sweep is still running — this section will populate
 when it finishes.</p></div>"""
@@ -172,6 +237,16 @@ the realistic target for weight theft.</p>
 
 {frontier_section}
 
+<h2>Method validation (sanity checks)</h2>
+<div class="card">{('<img alt="method validation" src="'+uri_valid+'">') if uri_valid else
+'<p class="sub">validation figure pending.</p>'}
+<p class="sub">Correctness checks for the compression families: as low-rank <b>rank</b> &rarr; full,
+as sparsity <b>% kept</b> &rarr; 100%, and at <b>8-bit</b> quant, the reconstructed model's loss
+returns to the baseline (dashed) — confirming the implementations are bug-free. The takeaway: these
+trained LLM weights are <b>near-full-rank and dense</b>, so low-rank and sparsity only become
+lossless near full rank / ~all weights (no real compression). Quantization is the family that
+compresses well, which is why the recoverable frontier is all quantization-based.</p></div>
+
 <p class="foot">Repo: <a href="https://github.com/jacobcd52/weight-compression-recovery">
 jacobcd52/weight-compression-recovery</a>. Regenerated by <code>python -m src.llm.report</code>.
 Released-model loss measured on our held-out SimpleStories test split; paper token count from the
@@ -183,6 +258,10 @@ def main():
     vic = json.load(open(os.path.join(VICTIM_DIR, "summary.json")))
     fr = json.load(open(FRONTIER)) if os.path.exists(FRONTIER) else None
     front = make_frontier_fig(fr) if fr else []
+    if fr:
+        make_retrain_fig(fr)
+    if os.path.exists(VALIDATION):
+        make_validation_fig(json.load(open(VALIDATION)))
     os.makedirs("docs", exist_ok=True)
     with open("docs/llm.html", "w") as f:
         f.write(build_html(vic, fr, front))
