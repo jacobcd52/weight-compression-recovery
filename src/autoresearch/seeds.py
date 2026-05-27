@@ -60,11 +60,50 @@ def reconstruct_tensor(payload, shape):
     return flat.reshape(shape)
 '''
 
+# --- aggressive sub-0.01 seeds (extreme end of the frontier) ---
+_LOWRANK_ABS = '''
+import numpy as np, math
+KNOBS = {"rank": %d}
+def compress_tensor(w, rank=%d):
+    m = w.reshape(w.shape[0], -1).astype(np.float32)
+    r = max(1, min(rank, min(m.shape)))
+    U, S, Vt = np.linalg.svd(m, full_matrices=False)
+    return {"U": (U[:, :r] * S[:r]).astype(np.float16), "V": Vt[:r].astype(np.float16),
+            "n": m.shape[1]}
+def reconstruct_tensor(payload, shape):
+    mat = payload["U"].astype(np.float32) @ payload["V"].astype(np.float32)
+    return mat.reshape(shape)
+'''
+
+# 1-bit: sign per weight (packed) + one fp16 magnitude scale per group
+_QUANT1 = '''
+import numpy as np
+KNOBS = {"group": 64}
+def compress_tensor(w, group=64):
+    x = w.reshape(-1).astype(np.float32); n = x.size
+    pad = (-n) % group
+    if pad: x = np.concatenate([x, np.zeros(pad, np.float32)])
+    g = x.reshape(-1, group)
+    scale = np.abs(g).mean(1).astype(np.float16)
+    packed = np.packbits((g >= 0).astype(np.uint8).reshape(-1))
+    return {"packed": packed, "scale": scale, "n": np.int32(n), "group": np.int32(group)}
+def reconstruct_tensor(payload, shape):
+    n = int(payload["n"]); group = int(payload["group"])
+    tot = n + ((-n) % group)
+    bits = np.unpackbits(payload["packed"])[:tot].reshape(-1, group).astype(np.float32)
+    rec = ((bits * 2 - 1) * payload["scale"].astype(np.float32)[:, None]).reshape(-1)[:n]
+    return rec.reshape(shape)
+'''
+
 SEEDS = {
     "seed_quant8": ("quant", _QUANT % (8, 8)),
     "seed_quant4": ("quant", _QUANT % (4, 4)),
     "seed_quant2": ("quant", _QUANT % (2, 2)),
+    "seed_quant1": ("quant", _QUANT1),
     "seed_kmeans4": ("kmeans", _KMEANS),
     "seed_lowrank": ("lowrank", _LOWRANK),
+    "seed_lowrank_r8": ("lowrank", _LOWRANK_ABS % (8, 8)),
+    "seed_lowrank_r2": ("lowrank", _LOWRANK_ABS % (2, 2)),
+    "seed_lowrank_r1": ("lowrank", _LOWRANK_ABS % (1, 1)),
     "seed_magsparse": ("sparse", _MAGSPARSE),
 }

@@ -136,10 +136,15 @@ ResNet-20 / CIFAR-10 (GroupNorm, best-LR baseline) &middot; {status} &middot; ge
 </div>
 
 <div class="card" style="border-color:var(--accent)">
-<b>&#129518; New: auto-research.</b> An LLM evolved its own compression schemes against this same
+<b>&#129518; Auto-research.</b> An LLM evolved its own compression schemes against this same
 recovery metric and beat the hand-tuned baseline — pushing the recovering frontier to
 <b>≈19× compression</b> (ratio 0.053) for ~2% retraining, by rediscovering group-wise NormalFloat
 quantization. <a href="autoresearch.html">See the auto-research report &rarr;</a>
+</div>
+<div class="card" style="border-color:var(--accent)">
+<b>&#128218; Scaling up to a real LLM.</b> The same threat model on an 11M-param SimpleStories
+language model (undertrained, single-pass). Victim training, paper comparison, and the
+compression/recovery frontier. <a href="llm.html">See the LLM report &rarr;</a>
 </div>
 
 <h2>What this measures</h2>
