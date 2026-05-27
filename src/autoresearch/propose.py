@@ -39,10 +39,18 @@ def build_prompt(parents, target_loss, budget_pct, best_ratio=None):
 
 
 def parse_code(text):
-    m = re.findall(r"```(?:python)?\s*(.*?)```", text, re.DOTALL)
-    if m:
-        return max(m, key=len).strip()
-    return text.strip() if "def compress_tensor" in text else None
+    # consume any fence language tag up to the newline (```python / ```py / ```python3 / bare ```)
+    blocks = re.findall(r"```[ \t]*[A-Za-z0-9_+\-]*[ \t]*\r?\n(.*?)```", text, re.DOTALL)
+    # prefer a block that actually defines the interface, else the largest block
+    good = [b for b in blocks if "def compress_tensor" in b and "def reconstruct_tensor" in b]
+    pool = good or blocks
+    if pool:
+        return max(pool, key=len).strip()
+    # unterminated fence (e.g. response truncated at max_tokens): take text after the opening fence
+    m = re.search(r"```[ \t]*[A-Za-z0-9_+\-]*[ \t]*\r?\n(.*)$", text, re.DOTALL)
+    if m and "def compress_tensor" in m.group(1):
+        return m.group(1).strip()
+    return text.strip() if "def compress_tensor" in text and not text.lstrip().startswith("`") else None
 
 
 def propose_claude_p(prompt, model="claude-sonnet-4-6", timeout=180):
@@ -57,13 +65,16 @@ def propose_claude_p(prompt, model="claude-sonnet-4-6", timeout=180):
         return None, f"claude -p timeout >{timeout}s"
 
 
-def propose_api(prompt, model="claude-sonnet-4-6", timeout=120):
+def propose_api(prompt, model="claude-sonnet-4-6", timeout=120, max_tokens=8192):
     import anthropic
     client = anthropic.Anthropic()
-    msg = client.messages.create(model=model, max_tokens=2048,
+    msg = client.messages.create(model=model, max_tokens=max_tokens,
                                  messages=[{"role": "user", "content": prompt}])
     text = "".join(b.text for b in msg.content if getattr(b, "type", "") == "text")
-    return parse_code(text), None
+    code = parse_code(text)
+    if code is None and msg.stop_reason == "max_tokens":
+        return None, "truncated at max_tokens (no parseable code)"
+    return code, None
 
 
 def propose(prompt, backend="claude_p", model="claude-sonnet-4-6"):

@@ -95,7 +95,40 @@ def reconstruct_tensor(payload, shape):
     return rec.reshape(shape)
 '''
 
+# additive / multi-codebook vector quantization (AQLM / "Aggressive Compression" style):
+# split rows into sub-vectors; encode each as a SUM of M codebook entries (residual k-means).
+_ADDVQ = '''
+import numpy as np
+KNOBS = {"dim": 8, "K": 256, "M": 2, "iters": 4}
+def compress_tensor(w, dim=8, K=256, M=2, iters=4):
+    x = w.reshape(-1).astype(np.float32); n = x.size
+    pad = (-n) % dim
+    if pad: x = np.concatenate([x, np.zeros(pad, np.float32)])
+    V = x.reshape(-1, dim); nv = V.shape[0]
+    rng = np.random.default_rng(0)
+    resid = V.copy(); cbs = []; idxs = []
+    for m in range(M):
+        c = resid[rng.integers(0, nv, K)].copy()
+        for _ in range(iters):
+            lab = np.argmin(((resid[:, None, :] - c[None, :, :]) ** 2).sum(-1), axis=1)
+            for j in range(K):
+                msk = lab == j
+                if msk.any(): c[j] = resid[msk].mean(0)
+        lab = np.argmin(((resid[:, None, :] - c[None, :, :]) ** 2).sum(-1), axis=1)
+        cbs.append(c.astype(np.float16)); idxs.append(lab.astype(np.uint16 if K > 256 else np.uint8))
+        resid = resid - c[lab]
+    return {"cbs": cbs, "idxs": idxs, "n": np.int32(n), "dim": np.int32(dim)}
+def reconstruct_tensor(payload, shape):
+    dim = int(payload["dim"]); n = int(payload["n"])
+    nv = payload["idxs"][0].shape[0]
+    rec = np.zeros((nv, dim), np.float32)
+    for c, lab in zip(payload["cbs"], payload["idxs"]):
+        rec += c.astype(np.float32)[lab.astype(np.int64)]
+    return rec.reshape(-1)[:n].reshape(shape)
+'''
+
 SEEDS = {
+    "seed_addvq": ("vq", _ADDVQ),
     "seed_quant8": ("quant", _QUANT % (8, 8)),
     "seed_quant4": ("quant", _QUANT % (4, 4)),
     "seed_quant2": ("quant", _QUANT % (2, 2)),
