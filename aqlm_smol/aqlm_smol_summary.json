@@ -1,0 +1,11 @@
+{
+ "baseline": {"wikitext2": 11.4708, "c4": 14.7214},
+ "points": [
+  {"name": "2x8g8",  "nominal_bpp": 2.0, "bpp_block": 2.061,
+   "stage1_wt2": 99.03,    "stage1_c4": 80.74,  "stage2_wt2": 24.897, "stage2_c4": 25.594},
+  {"name": "1x8g8",  "nominal_bpp": 1.0, "bpp_block": 1.037,
+   "stage1_wt2": 31698.36, "stage1_c4": null,   "stage2_wt2": 363.86, "stage2_c4": 201.27},
+  {"name": "1x8g16", "nominal_bpp": 0.5, "bpp_block": 0.561,
+   "stage1_wt2": 40942.88, "stage1_c4": null,   "stage2_wt2": 2325.93, "stage2_c4": 1055.19}
+ ]
+}
