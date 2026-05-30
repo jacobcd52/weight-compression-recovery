@@ -1,0 +1,12 @@
+{
+ "model": "TinyLlama-1.1B",
+ "baseline": {"wikitext2": 7.7754, "c4": 9.2886},
+ "points": [
+  {"name": "2x8g8",  "nominal_bpp": 2.0, "bpp_block": 2.017,
+   "stage1_wt2": 16.35,   "stage1_c4": 16.88,   "stage2_wt2": 11.510, "stage2_c4": 12.905},
+  {"name": "1x8g8",  "nominal_bpp": 1.0, "bpp_block": 1.012,
+   "stage1_wt2": 858.09,  "stage1_c4": 460.62,  "stage2_wt2": 84.126, "stage2_c4": 58.687},
+  {"name": "1x8g16", "nominal_bpp": 0.5, "bpp_block": 0.517,
+   "stage1_wt2": 7259.45, "stage1_c4": 4925.58, "stage2_wt2": 1143.73, "stage2_c4": 659.56}
+ ]
+}
