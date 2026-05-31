@@ -1,0 +1,52 @@
+{
+  "2": {
+    "code_bits": 2663424,
+    "codebook_bits": 279552,
+    "scale_bits": 331776,
+    "total_params": 9437184,
+    "code_bpp": 0.2822265625,
+    "codebook_bpp": 0.029622395833333332,
+    "scale_bpp": 0.03515625,
+    "total_bpp": 0.3470052083333333
+  },
+  "3": {
+    "code_bits": 3843072,
+    "codebook_bits": 301056,
+    "scale_bits": 331776,
+    "total_params": 9437184,
+    "code_bpp": 0.4072265625,
+    "codebook_bpp": 0.031901041666666664,
+    "scale_bpp": 0.03515625,
+    "total_bpp": 0.4742838541666667
+  },
+  "4": {
+    "code_bits": 5022720,
+    "codebook_bits": 344064,
+    "scale_bits": 331776,
+    "total_params": 9437184,
+    "code_bpp": 0.5322265625,
+    "codebook_bpp": 0.036458333333333336,
+    "scale_bpp": 0.03515625,
+    "total_bpp": 0.6038411458333334
+  },
+  "6": {
+    "code_bits": 7382016,
+    "codebook_bits": 602112,
+    "scale_bits": 331776,
+    "total_params": 9437184,
+    "code_bpp": 0.7822265625,
+    "codebook_bpp": 0.06380208333333333,
+    "scale_bpp": 0.03515625,
+    "total_bpp": 0.8811848958333334
+  },
+  "8": {
+    "code_bits": 9741312,
+    "codebook_bits": 1634304,
+    "scale_bits": 331776,
+    "total_params": 9437184,
+    "code_bpp": 1.0322265625,
+    "codebook_bpp": 0.17317708333333334,
+    "scale_bpp": 0.03515625,
+    "total_bpp": 1.2405598958333333
+  }
+}
