@@ -65,14 +65,19 @@ SEED_VQ_PLAIN = SEED_AQLM_AWARE.replace(
 SEED_AQLM_FINETUNE = '''
 import numpy as np, torch
 KNOBS = {"dsub": 8, "K": 256, "M": 2, "kmeans_iters": 12, "ft_steps": 120, "ft_lr": 0.01}
+def _assign(X, c, chunk=1000000):   # chunked nearest-centroid so big matrices don't OOM the cdist
+    out = torch.empty(X.shape[0], dtype=torch.long, device=X.device)
+    for i in range(0, X.shape[0], chunk):
+        out[i:i+chunk] = torch.cdist(X[i:i+chunk], c).argmin(1)
+    return out
 def _kmeans(X, K, iters):
     c = X[torch.randperm(X.shape[0], device=X.device)[:K]].clone()
     for _ in range(iters):
-        lab = torch.cdist(X, c).argmin(1)
+        lab = _assign(X, c)
         c2 = torch.zeros_like(c); c2.index_add_(0, lab, X)
         cnt = torch.bincount(lab, minlength=K).clamp_min(1).unsqueeze(1).float()
         c = c2 / cnt
-    return c, torch.cdist(X, c).argmin(1)
+    return c, _assign(X, c)
 def compress_tensor(w, H=None, dsub=8, K=256, M=2, kmeans_iters=12, ft_steps=120, ft_lr=0.01):
     dev = "cuda" if torch.cuda.is_available() else "cpu"
     W = torch.from_numpy(np.ascontiguousarray(w)).float().to(dev)

@@ -38,7 +38,7 @@ _BANNED = [r"\bimport\s+os\b", r"\bimport\s+sys\b", r"\bimport\s+subprocess\b",
            r"\bimport\s+socket\b", r"\brequests\b", r"\burllib\b", r"\bopen\s*\(",
            r"\beval\s*\(", r"\bexec\s*\(", r"__import__", r"\bglobals\s*\(", r"\blocals\s*\(",
            r"torch\.load", r"torch\.save", r"np\.load", r"np\.fromfile", r"\bnp\.save",
-           r"pickle\.load", r"\bgetattr\s*\(", r"os\.", r"sys\.", r"\.cpu_count\b"]
+           r"pickle\.load", r"\bgetattr\s*\(", r"\bos\.", r"\bsys\.", r"\.cpu_count\b"]
 
 
 def validate_aware(code, max_literal=8192):
@@ -77,7 +77,9 @@ def _to_numpy(obj):
 
 
 def _payload_bytes(payload):
-    return len(zlib.compress(pickle.dumps(_to_numpy(payload), protocol=4), level=9))
+    # level 6 (not 9): on a 1.4B model a naive per-weight payload is ~GBs and level-9 zlib times out;
+    # 6 is ~5-10x faster with <2% size difference. Compact (codebook/packed) payloads are unaffected.
+    return len(zlib.compress(pickle.dumps(_to_numpy(payload), protocol=4), level=6))
 
 
 def _call_compress(fn, w, H, knobs):
